@@ -71,7 +71,9 @@ fun CameraCaptureScreen(
     var busy by remember { mutableStateOf(false) }
     var frontOcr by remember { mutableStateOf(OcrResult.EMPTY) }
     var keepDraft by remember { mutableStateOf(false) }
+    var pendingFile by remember { mutableStateOf<File?>(null) }
     val keepDraftState = rememberUpdatedState(keepDraft)
+    val pendingFileState = rememberUpdatedState(pendingFile)
 
     val imageCapture = remember {
         ImageCapture.Builder()
@@ -82,6 +84,7 @@ fun CameraCaptureScreen(
     DisposableEffect(Unit) {
         onDispose {
             executor.shutdown()
+            pendingFileState.value?.delete()
             if (!keepDraftState.value) vm.discardNewCard()
         }
     }
@@ -165,9 +168,11 @@ fun CameraCaptureScreen(
                         context,
                         if (side == Side.FRONT) "front" else "back"
                     )
+                    pendingFile = target
                     takePhoto(imageCapture, target, executor,
                         onError = {
                             target.delete()
+                            if (pendingFile == target) pendingFile = null
                             busy = false
                         },
                         onSaved = {
@@ -181,11 +186,13 @@ fun CameraCaptureScreen(
                                 if (side == Side.FRONT) {
                                     frontOcr = ocr
                                     vm.updateDraft { it.copy(frontImage = target.name) }
+                                    pendingFile = null
                                     vm.mergeParsed(CardParser.parse(ocr))
                                     side = Side.BACK
                                     busy = false
                                 } else {
                                     vm.updateDraft { it.copy(backImage = target.name) }
+                                    pendingFile = null
                                     vm.mergeParsed(CardParser.parse(frontOcr, ocr))
                                     busy = false
                                     keepDraft = true
