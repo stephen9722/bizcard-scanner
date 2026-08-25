@@ -2,6 +2,7 @@ package tw.pentamaster.bizcard.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -32,7 +33,7 @@ import tw.pentamaster.bizcard.data.BusinessCard
 import tw.pentamaster.bizcard.util.ImageStore
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun CardDetailScreen(
     vm: CardViewModel,
