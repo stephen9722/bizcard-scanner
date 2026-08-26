@@ -1,5 +1,8 @@
 package tw.pentamaster.bizcard.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -9,8 +12,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -38,7 +43,8 @@ fun CardListScreen(
     onOpen: (Long) -> Unit,
     onScan: () -> Unit,
     onAddManually: () -> Unit,
-    onBackup: () -> Unit
+    onBackup: () -> Unit,
+    onKeyAccounts: () -> Unit
 ) {
     val cards by vm.cards.collectAsStateWithLifecycle()
     val query by vm.query.collectAsStateWithLifecycle()
@@ -70,6 +76,10 @@ fun CardListScreen(
                         Icon(Icons.Default.MoreVert, contentDescription = "更多")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Key Account 組織圖") },
+                            onClick = { menuOpen = false; onKeyAccounts() }
+                        )
                         DropdownMenuItem(
                             text = { Text("備份與匯出") },
                             onClick = { menuOpen = false; onBackup() }
@@ -163,7 +173,7 @@ private fun CardRow(card: BusinessCard, onClick: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -210,14 +220,25 @@ private fun CardRow(card: BusinessCard, onClick: () -> Unit) {
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                if (card.backImage.isNotBlank()) {
+                    Text(
+                        "正反面",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            if (card.backImage.isNotBlank()) {
-                Text(
-                    "正反面",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            val number = card.mobile.ifBlank { card.phone }
+            if (number.isNotBlank()) {
+                IconButton(onClick = { dial(context, number) }) {
+                    Icon(Icons.Default.Phone, contentDescription = "撥打 ${card.displayName}")
+                }
+            }
+            if (card.email.isNotBlank()) {
+                IconButton(onClick = { mail(context, card.email) }) {
+                    Icon(Icons.Default.Email, contentDescription = "寄信給 ${card.displayName}")
+                }
             }
         }
     }
@@ -246,5 +267,24 @@ private fun EmptyState(
         )
         Spacer(Modifier.height(20.dp))
         Button(onClick = onAction) { Text(actionLabel) }
+    }
+}
+
+private fun dial(context: Context, number: String) {
+    val clean = number.filter { it.isDigit() || it == '+' }
+    if (clean.isBlank()) return
+    safeStart(context, Intent(Intent.ACTION_DIAL, Uri.parse("tel:$clean")))
+}
+
+private fun mail(context: Context, address: String) {
+    if (address.isBlank()) return
+    safeStart(context, Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${Uri.encode(address.trim())}")))
+}
+
+private fun safeStart(context: Context, intent: Intent) {
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        // Keep search/results usable even if the device has no dialer or email app.
     }
 }
