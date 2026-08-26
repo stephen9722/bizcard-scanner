@@ -1,8 +1,12 @@
 package tw.pentamaster.bizcard.ui
 
 import android.app.Application
+import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -12,11 +16,17 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import android.net.Uri
 import tw.pentamaster.bizcard.data.BackupManager
 import tw.pentamaster.bizcard.data.BusinessCard
 import tw.pentamaster.bizcard.data.CardRepository
 import tw.pentamaster.bizcard.util.ImageStore
+
+data class TransferPackage(
+    val uri: Uri,
+    val fileName: String,
+    val cards: Int,
+    val images: Int
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CardViewModel(app: Application) : AndroidViewModel(app) {
@@ -148,6 +158,40 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
     // ---- backup / export -------------------------------------------------
 
     fun suggestedName(ext: String): String = backup.suggestedName(ext)
+
+    fun prepareTransfer(onReady: (TransferPackage?, String?) -> Unit) =
+        viewModelScope.launch {
+            _backupBusy.value = true
+            val app = getApplication<Application>()
+            val shareDir = File(app.cacheDir, "share")
+            try {
+                // Only keep the newest transfer package. It lives in cache, not in the
+                // permanent card/photo store, and FileProvider exposes only this folder.
+                if (shareDir.exists()) shareDir.deleteRecursively()
+                if (!shareDir.mkdirs() && !shareDir.isDirectory) {
+                    throw IOException("無法建立暫存資料夾")
+                }
+
+                val file = File(shareDir, backup.suggestedName("zip"))
+                if (!file.createNewFile()) throw IOException("無法建立轉移檔")
+
+                val uri = FileProvider.getUriForFile(
+                    app,
+                    "${app.packageName}.fileprovider",
+                    file
+                )
+                val result = backup.exportZip(uri)
+                onReady(
+                    TransferPackage(uri, file.name, result.cards, result.images),
+                    null
+                )
+            } catch (e: Exception) {
+                shareDir.deleteRecursively()
+                onReady(null, "建立轉移檔失敗:${e.message ?: "未知錯誤"}")
+            } finally {
+                _backupBusy.value = false
+            }
+        }
 
     fun exportZip(uri: Uri, onDone: (String) -> Unit) = runBackup(onDone) {
         val r = backup.exportZip(uri)
