@@ -22,7 +22,8 @@ object CardParser {
         "股份有限公司", "有限公司", "企業社", "工作室", "事務所", "實業", "工業", "科技",
         "國際", "集團", "企業", "公司", "電子", "設備", "機械", "貿易", "顧問",
         "Co.", " Co ", "Ltd", "Inc", "Corp", "Company", "Technolog", "Industr", "Group",
-        "Equipment", "Electronics", "Semiconductor", "Automation"
+        "Equipment", "Electronics", "Semiconductor", "Automation", "Solutions", "Systems",
+        "Manufacturing", "Enterprise"
     )
 
     private val TITLE_HINTS = listOf(
@@ -122,7 +123,6 @@ object CardParser {
                 return@forEachIndexed
             }
 
-            // Capture both language variants, even when OCR merges them into one line.
             if ((company.isBlank() || companyEn.isBlank()) && looksLikeCompany(t)) {
                 val split = splitBilingual(t)
                 when {
@@ -130,8 +130,8 @@ object CardParser {
                         if (company.isBlank()) company = split.first
                         if (companyEn.isBlank()) companyEn = split.second
                     }
-                    t.any(Char::isCjk) && company.isBlank() -> company = t
-                    t.any(Char::isAsciiLetter) && companyEn.isBlank() -> companyEn = t
+                    t.any { it.isCjk() } && company.isBlank() -> company = t
+                    t.any { it.isAsciiLetter() } && companyEn.isBlank() -> companyEn = t
                 }
                 consumed += idx
                 return@forEachIndexed
@@ -179,7 +179,6 @@ object CardParser {
         var zh = ""
         var en = ""
 
-        // Strongest case: OCR merged "王大明 David Wang" into a single line.
         candidates.sortedByDescending { it.height }.forEach { line ->
             val split = splitBilingual(line.text) ?: return@forEach
             if (zh.isBlank() && isLikelyChineseName(split.first)) zh = split.first
@@ -216,21 +215,17 @@ object CardParser {
         return zh to en
     }
 
+    /** Corporate keywords are required; an all-uppercase person's name must stay a name. */
     private fun looksLikeCompany(text: String): Boolean {
         val t = text.trim()
-        if (COMPANY_HINTS.any { t.contains(it, ignoreCase = true) }) return true
-        if (!t.any(Char::isAsciiLetter)) return false
-        val words = englishWords(t)
-        val upper = t.count(Char::isUpperCase)
-        val letters = t.count(Char::isLetter).coerceAtLeast(1)
-        return words.size >= 2 && upper.toDouble() / letters >= 0.65 && t.length >= 8
+        return COMPANY_HINTS.any { t.contains(it, ignoreCase = true) }
     }
 
     /** Splits a mixed CJK/Latin line at the first script boundary. */
     private fun splitBilingual(raw: String): Pair<String, String>? {
         val text = raw.trim()
-        val firstCjk = text.indexOfFirst(Char::isCjk)
-        val firstLatin = text.indexOfFirst(Char::isAsciiLetter)
+        val firstCjk = text.indexOfFirst { it.isCjk() }
+        val firstLatin = text.indexOfFirst { it.isAsciiLetter() }
         if (firstCjk < 0 || firstLatin < 0) return null
 
         val zh: String
@@ -242,16 +237,16 @@ object CardParser {
             en = text.substring(0, firstCjk).trimLanguageBoundary()
             zh = text.substring(firstCjk).trimLanguageBoundary()
         }
-        return if (zh.any(Char::isCjk) && en.any(Char::isAsciiLetter)) zh to en else null
+        return if (zh.any { it.isCjk() } && en.any { it.isAsciiLetter() }) zh to en else null
     }
 
     private fun isLikelyChineseName(text: String): Boolean {
         val compact = text.replace(" ", "")
-        return compact.length in 2..4 && compact.all(Char::isCjk)
+        return compact.length in 2..4 && compact.all { it.isCjk() }
     }
 
     private fun isLikelyEnglishName(text: String): Boolean {
-        if (!text.any(Char::isAsciiLetter) || text.any { it.isDigit() }) return false
+        if (!text.any { it.isAsciiLetter() } || text.any { it.isDigit() }) return false
         if (COMPANY_HINTS.any { text.contains(it, ignoreCase = true) }) return false
         if (TITLE_HINTS.any { text.contains(it, ignoreCase = true) }) return false
         if (DEPT_HINTS.any { text.contains(it, ignoreCase = true) }) return false
@@ -263,7 +258,7 @@ object CardParser {
     private fun englishWords(text: String): List<String> = text
         .split(Regex("[\\s./]+"))
         .map { it.trim('-', '\'', '.') }
-        .filter { it.any(Char::isAsciiLetter) }
+        .filter { word -> word.any { it.isAsciiLetter() } }
 
     private fun findAfterLabel(text: String, labels: List<String>, pattern: Regex): String? {
         labels.forEach { label ->
