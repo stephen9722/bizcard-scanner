@@ -21,8 +21,8 @@ android {
         applicationId = "tw.pentamaster.bizcard"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.0-beta"
+        versionCode = 5
+        versionName = "0.3.0-beta"
     }
 
     val betaSigning = if (
