@@ -8,11 +8,6 @@ import tw.pentamaster.bizcard.ocr.CardParser
 import tw.pentamaster.bizcard.ocr.OcrLine
 import tw.pentamaster.bizcard.ocr.OcrResult
 
-/**
- * These run on the JVM with `./gradlew testDebugUnitTest` — no device needed.
- * Add a case here every time the parser mis-reads a real card; it's the cheapest way
- * to stop a fix for one card from breaking another.
- */
 class CardParserTest {
 
     private fun ocr(vararg lines: Pair<String, Int>) = OcrResult(
@@ -33,6 +28,39 @@ class CardParserTest {
         assertEquals("陳志明", result.name)
         assertEquals("檳傑電子設備股份有限公司", result.company)
         assertEquals("資深工程師", result.title)
+    }
+
+    @Test
+    fun `splits merged bilingual name and company lines`() {
+        val result = CardParser.parse(
+            ocr(
+                "王大明 David Wang" to 42,
+                "業務經理" to 18,
+                "範例科技EXAMPLE TECHNOLOGY CO., LTD." to 22,
+                "Mobile: 0912-345-678" to 16
+            )
+        )
+        assertEquals("王大明", result.name)
+        assertEquals("David Wang", result.nameEn)
+        assertEquals("範例科技", result.company)
+        assertEquals("EXAMPLE TECHNOLOGY CO., LTD.", result.companyEn)
+    }
+
+    @Test
+    fun `captures bilingual fields when OCR returns separate lines`() {
+        val result = CardParser.parse(
+            ocr(
+                "王大明" to 42,
+                "David Wang" to 40,
+                "範例科技股份有限公司" to 22,
+                "EXAMPLE TECHNOLOGY CO., LTD." to 21,
+                "Sales Manager" to 18
+            )
+        )
+        assertEquals("王大明", result.name)
+        assertEquals("David Wang", result.nameEn)
+        assertEquals("範例科技股份有限公司", result.company)
+        assertEquals("EXAMPLE TECHNOLOGY CO., LTD.", result.companyEn)
     }
 
     @Test
@@ -130,7 +158,6 @@ class CardParserTest {
         assertEquals("a\\_b", CardRepository.escapeLike("a_b"))
         assertEquals("c\\\\d", CardRepository.escapeLike("c\\d"))
     }
-
 
     @Test
     fun `mobile duplicate key normalises local and international Taiwan formats`() {
