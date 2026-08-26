@@ -12,6 +12,8 @@ app/build/
 # Never commit signing credentials or local secrets
 *.jks
 *.keystore
+*.p12
+*.pfx
 keystore.properties
 .env
 .env.*
