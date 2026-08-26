@@ -7,12 +7,6 @@ import tw.pentamaster.bizcard.data.BusinessCard
 import tw.pentamaster.bizcard.data.CardCodec
 import tw.pentamaster.bizcard.data.VCardReader
 
-/**
- * Runs on the JVM: `./gradlew testDebugUnitTest`.
- *
- * Nothing here touches a photo, so android.util.Base64 is never called — which is why
- * these can run without a device.
- */
 class BackupFormatTest {
 
     // ---- CSV --------------------------------------------------------------
@@ -29,7 +23,6 @@ class BackupFormatTest {
 
     @Test
     fun `csv defuses leading formula characters`() {
-        // Excel would otherwise evaluate this as a formula when the file is opened
         assertEquals("'=1+1", CardCodec.csvEscape("=1+1"))
         assertEquals("'+886912345678", CardCodec.csvEscape("+886912345678"))
     }
@@ -41,8 +34,41 @@ class BackupFormatTest {
 
     @Test
     fun `csv row column count matches the header`() {
-        val row = CardCodec.toCsvRow(BusinessCard(name = "陳志明", company = "檳傑電子"))
+        val row = CardCodec.toCsvRow(
+            BusinessCard(
+                name = "陳志明",
+                nameEn = "David Chen",
+                company = "檳傑電子",
+                companyEn = "Example Electronics"
+            )
+        )
         assertEquals(CardCodec.CSV_HEADERS.size, row.split(",").size)
+    }
+
+    // ---- JSON -------------------------------------------------------------
+
+    @Test
+    fun `json backup preserves bilingual fields and reads old backups`() {
+        val original = BusinessCard(
+            name = "王大明",
+            nameEn = "David Wang",
+            company = "範例科技",
+            companyEn = "EXAMPLE TECHNOLOGY"
+        )
+        val restored = CardCodec.fromJson(CardCodec.toJson(original))
+        assertEquals("王大明", restored.name)
+        assertEquals("David Wang", restored.nameEn)
+        assertEquals("範例科技", restored.company)
+        assertEquals("EXAMPLE TECHNOLOGY", restored.companyEn)
+
+        val oldJson = org.json.JSONObject()
+            .put("name", "舊資料")
+            .put("company", "舊公司")
+        val oldRestored = CardCodec.fromJson(oldJson)
+        assertEquals("舊資料", oldRestored.name)
+        assertEquals("", oldRestored.nameEn)
+        assertEquals("舊公司", oldRestored.company)
+        assertEquals("", oldRestored.companyEn)
     }
 
     // ---- vCard out --------------------------------------------------------
@@ -53,6 +79,21 @@ class BackupFormatTest {
         assertTrue(out.contains("NOTE:很急\\;要回電\\,週一前"))
         assertTrue(out.startsWith("BEGIN:VCARD"))
         assertTrue(out.trim().endsWith("END:VCARD"))
+    }
+
+    @Test
+    fun `vcard round trips English alternate fields`() {
+        val source = BusinessCard(
+            name = "王大明",
+            nameEn = "David Wang",
+            company = "範例科技",
+            companyEn = "EXAMPLE TECHNOLOGY"
+        )
+        val parsed = VCardReader.parse(CardCodec.toVCard(source)).single().card
+        assertEquals("王大明", parsed.name)
+        assertEquals("David Wang", parsed.nameEn)
+        assertEquals("範例科技", parsed.company)
+        assertEquals("EXAMPLE TECHNOLOGY", parsed.companyEn)
     }
 
     // ---- vCard in ---------------------------------------------------------
@@ -86,8 +127,8 @@ class BackupFormatTest {
             "URL:www.acme.com\nEND:VCARD\n"
         val c = VCardReader.parse(vcf).single().card
         assertTrue("got: ${c.address}", c.address.contains("光明六路") && c.address.contains("12樓"))
-        assertEquals("Wang Da Ming", c.name)
-        assertEquals("Acme Corp", c.company)
+        assertEquals("Wang Da Ming", c.nameEn)
+        assertEquals("Acme Corp", c.companyEn)
         assertEquals("Sales Division", c.department)
     }
 
