@@ -9,7 +9,12 @@ object ContactActions {
     fun insert(context: Context, card: BusinessCard): Boolean {
         val primaryPhone = card.mobile.ifBlank { card.phone }
         val secondaryPhone = if (card.mobile.isNotBlank() && card.phone.isNotBlank()) card.phone else ""
+        val primaryName = card.name.ifBlank { card.nameEn }
+        val primaryCompany = card.company.ifBlank { card.companyEn }
+
         val notes = buildList {
+            if (card.nameEn.isNotBlank() && card.nameEn != primaryName) add("英文姓名：${card.nameEn}")
+            if (card.companyEn.isNotBlank() && card.companyEn != primaryCompany) add("英文公司：${card.companyEn}")
             if (card.department.isNotBlank()) add("部門：${card.department}")
             if (card.website.isNotBlank()) add("網站：${card.website}")
             if (card.fax.isNotBlank()) add("傳真：${card.fax}")
@@ -18,8 +23,8 @@ object ContactActions {
 
         val intent = Intent(Intent.ACTION_INSERT).apply {
             type = ContactsContract.Contacts.CONTENT_TYPE
-            if (card.name.isNotBlank()) putExtra(ContactsContract.Intents.Insert.NAME, card.name)
-            if (card.company.isNotBlank()) putExtra(ContactsContract.Intents.Insert.COMPANY, card.company)
+            if (primaryName.isNotBlank()) putExtra(ContactsContract.Intents.Insert.NAME, primaryName)
+            if (primaryCompany.isNotBlank()) putExtra(ContactsContract.Intents.Insert.COMPANY, primaryCompany)
             if (card.title.isNotBlank()) putExtra(ContactsContract.Intents.Insert.JOB_TITLE, card.title)
             if (primaryPhone.isNotBlank()) {
                 putExtra(ContactsContract.Intents.Insert.PHONE, primaryPhone)
