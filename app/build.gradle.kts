@@ -4,6 +4,15 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val signingStorePath = System.getenv("BIZCARD_SIGNING_STORE_FILE")
+    ?: providers.gradleProperty("BIZCARD_SIGNING_STORE_FILE").orNull
+val signingStorePassword = System.getenv("BIZCARD_KEYSTORE_PASSWORD")
+    ?: providers.gradleProperty("BIZCARD_KEYSTORE_PASSWORD").orNull
+val signingKeyAlias = System.getenv("BIZCARD_KEY_ALIAS")
+    ?: providers.gradleProperty("BIZCARD_KEY_ALIAS").orNull
+val signingKeyPassword = System.getenv("BIZCARD_KEY_PASSWORD")
+    ?: providers.gradleProperty("BIZCARD_KEY_PASSWORD").orNull
+
 android {
     namespace = "tw.pentamaster.bizcard"
     compileSdk = 36
@@ -12,13 +21,30 @@ android {
         applicationId = "tw.pentamaster.bizcard"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.1-beta"
+        versionCode = 3
+        versionName = "0.1.2-beta"
+    }
+
+    val betaSigning = if (
+        signingStorePath != null &&
+        signingStorePassword != null &&
+        signingKeyAlias != null &&
+        signingKeyPassword != null
+    ) {
+        signingConfigs.create("beta") {
+            storeFile = file(signingStorePath)
+            storePassword = signingStorePassword
+            keyAlias = signingKeyAlias
+            keyPassword = signingKeyPassword
+        }
+    } else {
+        null
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            betaSigning?.let { signingConfig = it }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
