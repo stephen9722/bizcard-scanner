@@ -9,18 +9,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.navigation.NavType
 import tw.pentamaster.bizcard.ui.BackupScreen
+import tw.pentamaster.bizcard.ui.BizCardTheme
 import tw.pentamaster.bizcard.ui.CameraCaptureScreen
 import tw.pentamaster.bizcard.ui.CardDetailScreen
 import tw.pentamaster.bizcard.ui.CardEditScreen
 import tw.pentamaster.bizcard.ui.CardListScreen
 import tw.pentamaster.bizcard.ui.CardViewModel
-import tw.pentamaster.bizcard.ui.BizCardTheme
+import tw.pentamaster.bizcard.ui.KeyAccountScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -50,12 +51,21 @@ class MainActivity : ComponentActivity() {
                                     vm.startNewCard()
                                     nav.navigate("edit/0")
                                 },
-                                onBackup = { nav.navigate("backup") }
+                                onBackup = { nav.navigate("backup") },
+                                onKeyAccounts = { nav.navigate("keyaccounts") }
                             )
                         }
 
                         composable("backup") {
                             BackupScreen(vm = vm, onBack = { nav.popBackStack() })
+                        }
+
+                        composable("keyaccounts") {
+                            KeyAccountScreen(
+                                vm = vm,
+                                onBack = { nav.popBackStack() },
+                                onOpenCard = { id -> nav.navigate("detail/$id") }
+                            )
                         }
 
                         composable("capture") {
