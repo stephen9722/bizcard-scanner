@@ -2,7 +2,9 @@ name: Android CI
 
 on:
   push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 permissions:
   contents: read
@@ -36,3 +38,44 @@ jobs:
 
       - name: Test, lint and build debug APK
         run: gradle testDebugUnitTest lintDebug assembleDebug --stacktrace
+
+      - name: Upload installable debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BizCardScanner-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  release-beta:
+    name: Publish v0.1.0-beta
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download built APK
+        uses: actions/download-artifact@v4
+        with:
+          name: BizCardScanner-debug
+          path: release
+
+      - name: Prepare release APK
+        run: mv release/app-debug.apk release/BizCardScanner-v0.1.0-beta-debug.apk
+
+      - name: Create beta release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.1.0-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v0.1.0-beta already exists; keeping the existing versioned release."
+          else
+            gh release create v0.1.0-beta \
+              release/BizCardScanner-v0.1.0-beta-debug.apk \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "BizCard Scanner v0.1.0-beta" \
+              --prerelease \
+              --notes "First installable beta. Includes offline business-card OCR, automatic card edge detection/perspective correction, local Room storage, import/export/backup, and the parser and reliability fixes validated by Android CI. This is a debug-signed beta APK intended for direct testing, not Play Store distribution."
