@@ -1,14 +1,6 @@
 package tw.pentamaster.bizcard.data
 
-/**
- * Reads vCard 2.1 / 3.0 / 4.0 well enough to migrate a contact export out of another
- * card app.
- *
- * The two things that break naive parsers on real Chinese exports are handled here:
- * line folding (a long ADR wrapped onto continuation lines starting with a space) and
- * QUOTED-PRINTABLE, which is what vCard 2.1 exporters use for non-ASCII text — without
- * decoding it, every Chinese name arrives as "=E9=99=B3=E5=BF=97=E6=98=8E".
- */
+/** Reads vCard 2.1 / 3.0 / 4.0 exports, including BizCard bilingual extensions. */
 object VCardReader {
 
     class ParsedCard(val card: BusinessCard, val photoBytes: ByteArray?)
@@ -52,11 +44,6 @@ object VCardReader {
         return out
     }
 
-    /**
-     * Joins continuation lines. Two different mechanisms have to be handled: RFC folding
-     * (next line starts with a space) and QUOTED-PRINTABLE soft breaks (previous line
-     * ends with '='). Real exports from older apps use both.
-     */
     private fun unfold(text: String): List<String> {
         val raw = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         val result = mutableListOf<String>()
@@ -129,16 +116,22 @@ object VCardReader {
         val org = value("ORG").split(';')
         val fn = value("FN")
         val n = value("N").split(';').filter { it.isNotBlank() }
-        // vCard N is Family;Given;... — Chinese names read family-first, western given-first.
-        val fromN = if (n.isNotEmpty() && n.all { it.all { c -> c.code in 0x4E00..0x9FFF } }) {
+        val fromN = if (n.isNotEmpty() && n.all { part -> part.all { it.isCjk() } }) {
             n.joinToString("")
         } else {
             n.asReversed().joinToString(" ")
         }
 
+        val (name, nameFromLatin) = localized(fn.ifBlank { fromN })
+        val nameEn = value("X-BIZCARD-NAME-EN").ifBlank { nameFromLatin }
+        val (company, companyFromLatin) = localized(org.getOrNull(0)?.trim().orEmpty())
+        val companyEn = value("X-BIZCARD-COMPANY-EN").ifBlank { companyFromLatin }
+
         return BusinessCard(
-            name = fn.ifBlank { fromN },
-            company = org.getOrNull(0)?.trim().orEmpty(),
+            name = name,
+            nameEn = nameEn,
+            company = company,
+            companyEn = companyEn,
             department = org.getOrNull(1)?.trim().orEmpty(),
             title = value("TITLE", "ROLE"),
             mobile = cell,
@@ -151,4 +144,24 @@ object VCardReader {
             notes = value("NOTE")
         )
     }
+
+    private fun localized(raw: String): Pair<String, String> {
+        val text = raw.trim()
+        if (text.isBlank()) return "" to ""
+        val firstCjk = text.indexOfFirst { it.isCjk() }
+        val firstLatin = text.indexOfFirst { it.isAsciiLetter() }
+        return when {
+            firstCjk >= 0 && firstLatin >= 0 && firstCjk < firstLatin ->
+                text.substring(0, firstLatin).trimBoundary() to text.substring(firstLatin).trimBoundary()
+            firstCjk >= 0 && firstLatin >= 0 ->
+                text.substring(firstCjk).trimBoundary() to text.substring(0, firstCjk).trimBoundary()
+            firstCjk >= 0 -> text to ""
+            firstLatin >= 0 -> "" to text
+            else -> text to ""
+        }
+    }
+
+    private fun Char.isCjk(): Boolean = code in 0x4E00..0x9FFF
+    private fun Char.isAsciiLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
+    private fun String.trimBoundary(): String = trim().trim(' ', '/', '|', '·', ':', '：').trim()
 }
