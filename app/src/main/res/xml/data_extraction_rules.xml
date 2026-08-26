@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <!--
+      Card photos and the database are excluded from Google's automatic cloud backup.
+      Keeping them out means your contacts are not silently copied to a Google server;
+      the trade-off is that a lost phone means lost cards, so export regularly.
+    -->
+    <cloud-backup>
+        <exclude domain="file" path="cards" />
+        <exclude domain="database" path="bizcard.db" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="cards" />
+        <include domain="database" path="bizcard.db" />
+    </device-transfer>
+</data-extraction-rules>
