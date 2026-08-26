@@ -17,7 +17,7 @@ Never commit the keystore, passwords, or the base64 value to the repository.
 
 The Android CI workflow always builds/tests the debug APK. On `main`, the fixed-signed beta release job runs after the build. If the four signing secrets are unavailable it exits safely without publishing a release.
 
-After the secrets are configured, open **Actions → Android CI → Run workflow** on `main`. The workflow will:
+After the secrets are configured, open **Actions → Android CI → Run workflow** on `main`, or merge/push a normal repository change to `main`. The workflow will:
 
 1. run unit tests, lint, and the debug build;
 2. decode the signing keystore only inside the temporary GitHub runner;
