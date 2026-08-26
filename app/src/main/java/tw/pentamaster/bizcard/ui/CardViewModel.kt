@@ -60,6 +60,10 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Unfiltered card stream used for account/company aggregation. */
+    val allCards: StateFlow<List<BusinessCard>> = repo.all()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     val tags: StateFlow<List<String>> = repo.allTags()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
