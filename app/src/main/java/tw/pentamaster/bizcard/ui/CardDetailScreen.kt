@@ -147,6 +147,8 @@ fun CardDetailScreen(
             DetailRow("地址", c.address) { map(context, c.address) }
             DetailRow("備註", c.notes)
 
+            CardMetaActions(c)
+
             if (c.tagList.isNotEmpty()) {
                 Row(
                     Modifier.padding(horizontal = 16.dp, vertical = 8.dp),

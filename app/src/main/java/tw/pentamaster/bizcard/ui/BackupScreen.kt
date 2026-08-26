@@ -170,6 +170,11 @@ fun BackupScreen(vm: CardViewModel, onBack: () -> Unit) {
                 onClick = { openVcf.launch(arrayOf("text/x-vcard", "text/vcard", "text/directory", "*/*")) }
             )
 
+            CsvImportAction(
+                enabled = !busy,
+                onMessage = { message = it }
+            )
+
             Spacer(Modifier.height(24.dp))
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,

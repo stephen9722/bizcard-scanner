@@ -22,6 +22,7 @@ import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import tw.pentamaster.bizcard.data.BusinessCard
+import tw.pentamaster.bizcard.util.ContactActions
 import tw.pentamaster.bizcard.util.ImageStore
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -41,6 +42,14 @@ fun CardEditScreen(
     val context = LocalContext.current
     var duplicate by remember { mutableStateOf<BusinessCard?>(null) }
     var showRawText by remember { mutableStateOf(false) }
+    var syncToContacts by remember(cardId) { mutableStateOf(cardId == 0L) }
+
+    val finishSave: (Long) -> Unit = { id ->
+        if (cardId == 0L && syncToContacts) {
+            ContactActions.insert(context, card.copy(id = id))
+        }
+        onSaved(id)
+    }
 
     val abandonAndBack = {
         if (cardId == 0L) vm.discardNewCard()
@@ -61,7 +70,7 @@ fun CardEditScreen(
                     TextButton(onClick = {
                         vm.checkDuplicate { dup ->
                             if (dup != null && dup.id != card.id) duplicate = dup
-                            else vm.save { id -> onSaved(id) }
+                            else vm.save { id -> finishSave(id) }
                         }
                     }) { Text("儲存") }
                 }
@@ -96,6 +105,30 @@ fun CardEditScreen(
             Field("地址", card.address, singleLine = false) { v -> vm.updateDraft { it.copy(address = v) } }
             Field("標籤(用逗號分隔)", card.tags) { v -> vm.updateDraft { it.copy(tags = v) } }
             Field("備註", card.notes, singleLine = false) { v -> vm.updateDraft { it.copy(notes = v) } }
+
+            if (cardId == 0L) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Switch(
+                            checked = syncToContacts,
+                            onCheckedChange = { syncToContacts = it }
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text("儲存後加入 Google / 手機聯絡人")
+                            Text(
+                                "會開啟 Android 系統聯絡人確認畫面。若儲存帳號是 Google，系統會再同步到 Google 聯絡人。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
 
             val raw = listOf(card.rawTextFront, card.rawTextBack)
                 .filter { it.isNotBlank() }
@@ -146,7 +179,7 @@ fun CardEditScreen(
             confirmButton = {
                 TextButton(onClick = {
                     duplicate = null
-                    vm.save { id -> onSaved(id) }
+                    vm.save { id -> finishSave(id) }
                 }) { Text("還是另存一張") }
             },
             dismissButton = {

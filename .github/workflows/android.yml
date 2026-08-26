@@ -47,7 +47,7 @@ jobs:
           retention-days: 30
 
   release-beta:
-    name: Publish v0.2.0-beta (fixed signed)
+    name: Publish v0.3.0-beta (fixed signed)
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
@@ -121,7 +121,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: BizCardScanner-v0.2.0-beta-signed
+          name: BizCardScanner-v0.3.0-beta-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 90
@@ -131,7 +131,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/release/app-release.apk release/BizCardScanner-v0.2.0-beta.apk
+          cp app/build/outputs/apk/release/app-release.apk release/BizCardScanner-v0.3.0-beta.apk
 
       - name: Create beta release if missing
         if: steps.signing.outputs.available == 'true'
@@ -139,8 +139,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view v0.2.0-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "v0.2.0-beta already exists; keeping the existing fixed-signed release."
+          if gh release view v0.3.0-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v0.3.0-beta already exists; keeping the existing fixed-signed release."
           else
-            gh release create v0.2.0-beta release/BizCardScanner-v0.2.0-beta.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BizCard Scanner v0.2.0-beta" --prerelease --notes "First beta using the permanent BizCard signing key. After the one-time migration from earlier ephemeral debug-signed builds, future betas signed with this same key can update in place. Includes automatic card perspective correction, offline OCR, import/export/backup, one-tap phone and email actions, and the offline Key Account organization view."
+            gh release create v0.3.0-beta release/BizCardScanner-v0.3.0-beta.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BizCard Scanner v0.3.0-beta" --prerelease --notes "Adds CamCard/全能名片王 and generic CSV import with original created-date preservation, joined/updated timestamps in card details, and Android system contact handoff so Google Contacts can sync newly saved cards when a Google account is selected. Continues using the permanent BizCard signing key for in-place upgrades."
           fi
