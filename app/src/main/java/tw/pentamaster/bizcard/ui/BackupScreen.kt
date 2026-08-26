@@ -1,5 +1,7 @@
 package tw.pentamaster.bizcard.ui
 
+import android.content.ClipData
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -11,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -18,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun BackupScreen(vm: CardViewModel, onBack: () -> Unit) {
 
+    val context = LocalContext.current
     val total by vm.total.collectAsStateWithLifecycle()
     val busy by vm.backupBusy.collectAsStateWithLifecycle()
     var message by remember { mutableStateOf<String?>(null) }
@@ -69,6 +73,46 @@ fun BackupScreen(vm: CardViewModel, onBack: () -> Unit) {
             )
 
             Spacer(Modifier.height(24.dp))
+            SectionLabel("換機")
+
+            ActionCard(
+                title = "轉移到新手機",
+                body = "自動產生包含所有欄位與正反面照片的完整 ZIP，接著開啟 Android 分享面板。可以用 Quick Share、Google Drive、LINE、Mail 等方式傳到另一支手機。",
+                button = "產生並分享",
+                enabled = !busy && total > 0,
+                onClick = {
+                    vm.prepareTransfer { pkg, error ->
+                        if (pkg == null) {
+                            message = error ?: "無法建立轉移檔。"
+                        } else {
+                            try {
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/zip"
+                                    putExtra(Intent.EXTRA_STREAM, pkg.uri)
+                                    putExtra(Intent.EXTRA_SUBJECT, "名片簿完整備份")
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "在另一支手機安裝 BizCard Scanner 後，進入「備份與匯出」→「還原備份」，再選擇這個 ZIP。"
+                                    )
+                                    clipData = ClipData.newUri(
+                                        context.contentResolver,
+                                        pkg.fileName,
+                                        pkg.uri
+                                    )
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(shareIntent, "傳送到新手機")
+                                )
+                            } catch (e: Exception) {
+                                message = "無法開啟分享面板:${e.message ?: "找不到可分享的 App"}"
+                            }
+                        }
+                    }
+                }
+            )
+
+            Spacer(Modifier.height(4.dp))
             SectionLabel("匯出")
 
             ActionCard(
