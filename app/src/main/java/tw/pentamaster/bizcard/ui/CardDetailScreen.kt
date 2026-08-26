@@ -136,7 +136,10 @@ fun CardDetailScreen(
                 }
             }
 
-            DetailRow("公司", c.company)
+            DetailRow("姓名（中文）", c.name)
+            DetailRow("Name (English)", c.nameEn)
+            DetailRow("公司（中文）", c.company)
+            DetailRow("Company (English)", c.companyEn)
             DetailRow("職稱", c.title)
             DetailRow("部門", c.department)
             DetailRow("手機", c.mobile) { dial(context, c.mobile) }

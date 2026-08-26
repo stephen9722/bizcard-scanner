@@ -22,28 +22,21 @@ enum class OrgLevel(val order: Int, val label: String) {
     OTHER(5, "其他 / 未判定")
 }
 
-/**
- * Offline organization inference for Key Account views.
- *
- * The app intentionally has no INTERNET permission, so this first version never sends
- * customer data to a cloud model. It groups normalized company names and infers a broad
- * seniority band from common Chinese/English titles. The result is a navigation aid,
- * not a claim about a real reporting line.
- */
+/** Offline organization inference for Key Account views. */
 object OrgAnalyzer {
 
     fun accounts(cards: List<BusinessCard>): List<AccountGroup> = cards
-        .filter { it.company.isNotBlank() }
-        .groupBy { companyKey(it.company) }
+        .filter { it.displayCompany.isNotBlank() }
+        .groupBy { companyKey(it.displayCompany) }
         .filterKeys { it.isNotBlank() }
         .map { (key, group) ->
             AccountGroup(
                 key = key,
-                displayName = preferredLabel(group.map { it.company }),
+                displayName = preferredLabel(group.map { it.displayCompany }),
                 cards = group.sortedWith(
                     compareBy<BusinessCard> { levelFor(it.title).order }
                         .thenBy { departmentKey(it.department) }
-                        .thenBy { it.name }
+                        .thenBy { it.displayName }
                 )
             )
         }
@@ -54,7 +47,7 @@ object OrgAnalyzer {
         .map { (key, group) ->
             OrgDepartment(
                 name = if (key == NO_DEPARTMENT) "未標示部門" else preferredLabel(group.map { it.department }),
-                cards = group.sortedWith(compareBy<BusinessCard> { levelFor(it.title).order }.thenBy { it.name })
+                cards = group.sortedWith(compareBy<BusinessCard> { levelFor(it.title).order }.thenBy { it.displayName })
             )
         }
         .sortedWith(
@@ -82,8 +75,6 @@ object OrgAnalyzer {
         val t = title.trim().lowercase()
 
         return when {
-            // Check vice-president variants before the generic word "president" so
-            // "Vice President" does not get promoted into the executive band.
             t.containsAny(
                 "副總", "協理", "處長", "廠長", "事業部主管", "營運長", "技術長", "財務長",
                 "vice president", "svp", "evp", "avp", "director", "head of", "chief operating",

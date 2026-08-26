@@ -6,14 +6,7 @@ import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-/**
- * Parser for contact CSV files exported by CamCard / 全能名片王 and other address-book tools.
- *
- * The importer intentionally maps by header name rather than by column position. This lets it
- * accept a small CamCard export like:
- * 創建日期,姓名,名字,名字拚音或音標,姓,姓氏拚音或音標,公司1,部門1,職位1,公司2
- * as well as richer exports that also contain phone, email, address, notes, etc.
- */
+/** Parser for CamCard / 全能名片王 and generic contact CSV files. */
 object CsvCardImporter {
 
     private const val MAX_ROWS = 20_000
@@ -41,15 +34,50 @@ object CsvCardImporter {
         }
 
         return rows.drop(1).mapNotNull { row ->
-            var name = value(row, "姓名", "全名", "名稱", "Name", "Full Name", "Display Name")
+            var name = value(row, "姓名(中文)", "姓名（中文）", "中文姓名")
+            var nameEn = value(row, "姓名(英文)", "姓名（英文）", "英文姓名", "English Name", "Name English", "Name (English)")
+
+            val genericName = value(row, "姓名", "全名", "名稱", "Name", "Full Name", "Display Name")
+            if (genericName.isNotBlank()) {
+                val (zh, en) = localized(genericName)
+                if (name.isBlank()) name = zh
+                if (nameEn.isBlank()) nameEn = en
+            }
+
             if (name.isBlank()) {
                 val family = value(row, "姓", "姓氏", "Last Name", "Family Name")
                 val given = value(row, "名字", "名", "First Name", "Given Name")
-                name = (family + given).trim()
+                val combined = (family + given).trim()
+                if (combined.any(Char::isCjk)) name = combined
+                else if (nameEn.isBlank()) nameEn = listOf(given, family).filter { it.isNotBlank() }.joinToString(" ")
             }
 
-            val company1 = value(row, "公司1", "公司", "公司名稱", "Company1", "Company", "Organization", "Organisation")
-            val company2 = value(row, "公司2", "Company2", "第二公司")
+            if (nameEn.isBlank()) {
+                val givenPhonetic = value(row, "名字拚音或音標", "名字拼音或音標", "Given Name Pinyin", "First Name Pinyin")
+                val familyPhonetic = value(row, "姓氏拚音或音標", "姓氏拼音或音標", "Family Name Pinyin", "Last Name Pinyin")
+                nameEn = listOf(givenPhonetic, familyPhonetic).filter { it.isNotBlank() }.joinToString(" ").trim()
+            }
+
+            var company = value(row, "公司(中文)", "公司（中文）", "中文公司", "公司中文")
+            var companyEn = value(row, "公司(英文)", "公司（英文）", "英文公司", "Company English", "Company (English)")
+            val extraCompanies = mutableListOf<String>()
+
+            fun consumeCompany(raw: String) {
+                if (raw.isBlank()) return
+                val (zh, en) = localized(raw)
+                if (zh.isNotBlank()) {
+                    if (company.isBlank()) company = zh
+                    else if (!company.equals(zh, ignoreCase = true)) extraCompanies += zh
+                }
+                if (en.isNotBlank()) {
+                    if (companyEn.isBlank()) companyEn = en
+                    else if (!companyEn.equals(en, ignoreCase = true)) extraCompanies += en
+                }
+            }
+
+            consumeCompany(value(row, "公司1", "公司", "公司名稱", "Company1", "Company", "Organization", "Organisation"))
+            consumeCompany(value(row, "公司2", "Company2", "第二公司"))
+
             val department = value(row, "部門1", "部門", "Department1", "Department")
             val title = value(row, "職位1", "職稱", "職位", "Title1", "Title", "Job Title")
             val mobile = value(row, "手機1", "手機", "行動電話1", "行動電話", "Mobile1", "Mobile", "Cell Phone", "Cell")
@@ -61,7 +89,7 @@ object CsvCardImporter {
             val tags = value(row, "標籤", "分類", "Tags", "Categories")
             val sourceNotes = value(row, "備註", "備忘", "註記", "Notes", "Note", "Memo")
 
-            if (name.isBlank() && company1.isBlank() && company2.isBlank()) return@mapNotNull null
+            if (name.isBlank() && nameEn.isBlank() && company.isBlank() && companyEn.isBlank()) return@mapNotNull null
 
             val createdAt = parseDate(
                 value(row, "創建日期", "建立日期", "新增日期", "掃描日期", "Created At", "Created", "Create Time")
@@ -70,8 +98,6 @@ object CsvCardImporter {
                 value(row, "更新日期", "修改日期", "Updated At", "Updated", "Modify Time")
             ) ?: createdAt
 
-            // Preserve every source column in rawTextFront so unsupported CamCard fields remain
-            // searchable and are not silently discarded during migration.
             val sourceText = originalHeaders.mapIndexedNotNull { index, header ->
                 val v = row.getOrNull(index)?.trim().orEmpty()
                 if (header.isBlank() || v.isBlank()) null else "$header: $v"
@@ -79,14 +105,14 @@ object CsvCardImporter {
 
             val notes = buildList {
                 if (sourceNotes.isNotBlank()) add(sourceNotes)
-                if (company2.isNotBlank() && !company2.equals(company1, ignoreCase = true)) {
-                    add("其他公司/單位：$company2")
-                }
+                extraCompanies.distinct().forEach { add("其他公司/單位：$it") }
             }.joinToString("\n")
 
             BusinessCard(
                 name = name,
-                company = company1.ifBlank { company2 },
+                nameEn = nameEn,
+                company = company,
+                companyEn = companyEn,
                 title = title,
                 department = department,
                 phone = phone,
@@ -104,6 +130,23 @@ object CsvCardImporter {
         }
     }
 
+    /** Classifies/splits one source cell into local/CJK and English/Latin variants. */
+    private fun localized(raw: String): Pair<String, String> {
+        val text = raw.trim()
+        if (text.isBlank()) return "" to ""
+        val firstCjk = text.indexOfFirst { it.isCjk() }
+        val firstLatin = text.indexOfFirst { it.isAsciiLetter() }
+        return when {
+            firstCjk >= 0 && firstLatin >= 0 && firstCjk < firstLatin ->
+                text.substring(0, firstLatin).trimBoundary() to text.substring(firstLatin).trimBoundary()
+            firstCjk >= 0 && firstLatin >= 0 ->
+                text.substring(firstCjk).trimBoundary() to text.substring(0, firstCjk).trimBoundary()
+            firstCjk >= 0 -> text to ""
+            firstLatin >= 0 -> "" to text
+            else -> text to ""
+        }
+    }
+
     private fun decode(bytes: ByteArray): String {
         val utf8 = Charsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
@@ -111,7 +154,6 @@ object CsvCardImporter {
         return try {
             utf8.decode(ByteBuffer.wrap(bytes)).toString()
         } catch (_: Exception) {
-            // A number of older Chinese Windows exports are Big5/CP950 rather than UTF-8.
             Charset.forName("Big5").decode(ByteBuffer.wrap(bytes)).toString()
         }
     }
@@ -125,22 +167,16 @@ object CsvCardImporter {
     private fun parseDate(raw: String): Long? {
         if (raw.isBlank()) return null
         val patterns = listOf(
-            "yyyy/MM/dd HH:mm:ss",
-            "yyyy/MM/dd HH:mm",
-            "yyyy/MM/dd",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm",
-            "yyyy-MM-dd",
-            "yyyy.MM.dd HH:mm:ss",
-            "yyyy.MM.dd HH:mm",
-            "yyyy.MM.dd"
+            "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm", "yyyy/MM/dd",
+            "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd",
+            "yyyy.MM.dd HH:mm:ss", "yyyy.MM.dd HH:mm", "yyyy.MM.dd"
         )
         patterns.forEach { pattern ->
             try {
                 val parser = SimpleDateFormat(pattern, Locale.US).apply { isLenient = false }
                 parser.parse(raw.trim())?.time?.let { return it }
             } catch (_: Exception) {
-                // Try the next known layout.
+                // Try next layout.
             }
         }
         raw.trim().toLongOrNull()?.let { epoch ->
@@ -149,7 +185,6 @@ object CsvCardImporter {
         return null
     }
 
-    /** RFC 4180-style CSV reader with quoted commas, quotes and embedded newlines. */
     private fun parseRows(text: String): List<List<String>> {
         val rows = mutableListOf<List<String>>()
         val row = mutableListOf<String>()
@@ -172,8 +207,7 @@ object CsvCardImporter {
             val ch = text[i]
             when {
                 ch == '"' && inQuotes && i + 1 < text.length && text[i + 1] == '"' -> {
-                    field.append('"')
-                    i++
+                    field.append('"'); i++
                 }
                 ch == '"' -> inQuotes = !inQuotes
                 ch == ',' && !inQuotes -> endField()
@@ -189,4 +223,8 @@ object CsvCardImporter {
         if (field.isNotEmpty() || row.isNotEmpty()) endRow()
         return rows
     }
+
+    private fun Char.isCjk(): Boolean = code in 0x4E00..0x9FFF
+    private fun Char.isAsciiLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
+    private fun String.trimBoundary(): String = trim().trim(' ', '/', '|', '·', ':', '：').trim()
 }

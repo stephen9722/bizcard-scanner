@@ -3,11 +3,7 @@ package tw.pentamaster.bizcard.data
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Conversions between BusinessCard and the three portable formats.
- *
- * Kept free of Android and IO types so it can be unit-tested on the JVM.
- */
+/** Portable JSON/CSV/vCard representations. */
 object CardCodec {
 
     // ---- JSON (full fidelity, used inside the ZIP backup) ----------------
@@ -15,7 +11,9 @@ object CardCodec {
     fun toJson(card: BusinessCard): JSONObject = JSONObject().apply {
         put("id", card.id)
         put("name", card.name)
+        put("nameEn", card.nameEn)
         put("company", card.company)
+        put("companyEn", card.companyEn)
         put("title", card.title)
         put("department", card.department)
         put("phone", card.phone)
@@ -35,9 +33,11 @@ object CardCodec {
     }
 
     fun fromJson(o: JSONObject): BusinessCard = BusinessCard(
-        id = 0, // always inserted as a new row; the old id is meaningless in this DB
+        id = 0,
         name = o.optString("name"),
+        nameEn = o.optString("nameEn"),
         company = o.optString("company"),
+        companyEn = o.optString("companyEn"),
         title = o.optString("title"),
         department = o.optString("department"),
         phone = o.optString("phone"),
@@ -62,24 +62,20 @@ object CardCodec {
     // ---- CSV --------------------------------------------------------------
 
     val CSV_HEADERS = listOf(
-        "姓名", "公司", "職稱", "部門", "手機", "電話", "傳真",
+        "姓名(中文)", "姓名(英文)", "公司(中文)", "公司(英文)",
+        "職稱", "部門", "手機", "電話", "傳真",
         "Email", "網站", "地址", "標籤", "備註",
         "正面圖檔", "背面圖檔", "建立時間", "更新時間"
     )
 
     fun toCsvRow(card: BusinessCard): String = listOf(
-        card.name, card.company, card.title, card.department,
-        card.mobile, card.phone, card.fax,
+        card.name, card.nameEn, card.company, card.companyEn,
+        card.title, card.department, card.mobile, card.phone, card.fax,
         card.email, card.website, card.address, card.tags, card.notes,
         card.frontImage, card.backImage,
         card.createdAt.toString(), card.updatedAt.toString()
     ).joinToString(",") { csvEscape(it) }
 
-    /**
-     * RFC 4180 quoting. Note the leading-symbol guard: a card whose name starts with
-     * = + - or @ would otherwise be interpreted as a formula when the CSV is opened in
-     * Excel, which is both a correctness bug and a well-known injection vector.
-     */
     fun csvEscape(raw: String): String {
         val v = if (raw.isNotEmpty() && raw[0] in "=+-@\t\r") "'$raw" else raw
         return if (v.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
@@ -90,12 +86,21 @@ object CardCodec {
     // ---- vCard 3.0 --------------------------------------------------------
 
     fun toVCard(card: BusinessCard, photoBase64: String? = null): String = buildString {
+        val primaryName = card.name.ifBlank { card.nameEn }
+        val primaryCompany = card.company.ifBlank { card.companyEn }
+
         appendLine("BEGIN:VCARD")
         appendLine("VERSION:3.0")
-        appendLine("N:${vEscape(card.name)};;;;")
+        appendLine("N:${vEscape(primaryName)};;;;")
         appendLine("FN:${vEscape(card.displayName)}")
-        if (card.company.isNotBlank() || card.department.isNotBlank()) {
-            appendLine("ORG:${vEscape(card.company)};${vEscape(card.department)}")
+        if (card.nameEn.isNotBlank() && card.nameEn != primaryName) {
+            appendLine("X-BIZCARD-NAME-EN:${vEscape(card.nameEn)}")
+        }
+        if (primaryCompany.isNotBlank() || card.department.isNotBlank()) {
+            appendLine("ORG:${vEscape(primaryCompany)};${vEscape(card.department)}")
+        }
+        if (card.companyEn.isNotBlank() && card.companyEn != primaryCompany) {
+            appendLine("X-BIZCARD-COMPANY-EN:${vEscape(card.companyEn)}")
         }
         if (card.title.isNotBlank()) appendLine("TITLE:${vEscape(card.title)}")
         if (card.mobile.isNotBlank()) appendLine("TEL;TYPE=CELL:${card.mobile}")
@@ -107,7 +112,6 @@ object CardCodec {
         if (card.tags.isNotBlank()) appendLine("CATEGORIES:${card.tagList.joinToString(",")}")
         if (card.notes.isNotBlank()) appendLine("NOTE:${vEscape(card.notes)}")
         if (photoBase64 != null) {
-            // Folded to 75 chars per line as the spec requires; some readers choke otherwise.
             appendLine("PHOTO;ENCODING=b;TYPE=JPEG:")
             photoBase64.chunked(74).forEach { appendLine(" $it") }
         }

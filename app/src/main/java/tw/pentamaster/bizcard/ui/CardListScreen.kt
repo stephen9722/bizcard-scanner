@@ -108,7 +108,7 @@ fun CardListScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                placeholder = { Text("搜尋姓名、公司、電話、備註…") },
+                placeholder = { Text("搜尋中英文姓名、公司、電話、備註…") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
@@ -155,9 +155,6 @@ fun CardListScreen(
                     )
 
                 else -> {
-                    // The card holder reference UI groups cards by the day they were added.
-                    // Sort by createdAt here instead of updatedAt so editing an old card does not
-                    // make it jump to the top or appear under the wrong historical date section.
                     val sections = remember(cards) {
                         cards
                             .sortedByDescending { it.createdAt }
@@ -250,7 +247,7 @@ private fun CardRow(card: BusinessCard, onClick: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                val sub = listOf(card.company, card.title)
+                val sub = listOf(card.displayCompany, card.title)
                     .filter { it.isNotBlank() }
                     .joinToString(" · ")
                 if (sub.isNotBlank()) {

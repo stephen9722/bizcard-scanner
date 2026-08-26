@@ -60,7 +60,6 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Unfiltered card stream used for account/company aggregation. */
     val allCards: StateFlow<List<BusinessCard>> = repo.all()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -91,7 +90,6 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
         _draft.value = BusinessCard()
     }
 
-    /** Removes photos belonging to a new card that the user abandoned before saving. */
     fun discardNewCard() {
         val card = _draft.value
         if (card.id != 0L) return
@@ -113,16 +111,14 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
         _scanning.value = value
     }
 
-    /**
-     * Merges freshly parsed OCR fields into the draft without clobbering anything the
-     * user already typed — rescanning the back of a card should fill in the blanks,
-     * not wipe a corrected name.
-     */
+    /** Merge OCR into blanks only, including both bilingual name/company fields. */
     fun mergeParsed(parsed: BusinessCard) {
         _draft.value = _draft.value.let { d ->
             d.copy(
                 name = d.name.ifBlank { parsed.name },
+                nameEn = d.nameEn.ifBlank { parsed.nameEn },
                 company = d.company.ifBlank { parsed.company },
+                companyEn = d.companyEn.ifBlank { parsed.companyEn },
                 title = d.title.ifBlank { parsed.title },
                 department = d.department.ifBlank { parsed.department },
                 phone = d.phone.ifBlank { parsed.phone },
@@ -140,8 +136,6 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
     fun save(onSaved: (Long) -> Unit = {}) = viewModelScope.launch {
         val current = _draft.value
         val id = repo.save(current)
-        // Mark a newly inserted draft as persisted before navigating away. This lets
-        // abandonment cleanup distinguish saved photos from temporary capture files.
         if (current.id == 0L) _draft.value = current.copy(id = id)
         onSaved(id)
     }
@@ -169,8 +163,6 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
             val app = getApplication<Application>()
             val shareDir = File(app.cacheDir, "share")
             try {
-                // Only keep the newest transfer package. It lives in cache, not in the
-                // permanent card/photo store, and FileProvider exposes only this folder.
                 if (shareDir.exists()) shareDir.deleteRecursively()
                 if (!shareDir.mkdirs() && !shareDir.isDirectory) {
                     throw IOException("無法建立暫存資料夾")
@@ -185,10 +177,7 @@ class CardViewModel(app: Application) : AndroidViewModel(app) {
                     file
                 )
                 val result = backup.exportZip(uri)
-                onReady(
-                    TransferPackage(uri, file.name, result.cards, result.images),
-                    null
-                )
+                onReady(TransferPackage(uri, file.name, result.cards, result.images), null)
             } catch (e: Exception) {
                 shareDir.deleteRecursively()
                 onReady(null, "建立轉移檔失敗:${e.message ?: "未知錯誤"}")

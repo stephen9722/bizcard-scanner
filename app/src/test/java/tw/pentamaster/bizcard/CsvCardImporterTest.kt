@@ -17,7 +17,9 @@ class CsvCardImporterTest {
 
         val card = CsvCardImporter.parse(csv.toByteArray(Charsets.UTF_8)).single()
         assertEquals("王小明", card.name)
-        assertEquals("Example Corp", card.company)
+        assertEquals("xiaoming wang", card.nameEn)
+        assertEquals("", card.company)
+        assertEquals("Example Corp", card.companyEn)
         assertEquals("研發部", card.department)
         assertEquals("經理", card.title)
         assertTrue(card.notes.contains("Example Taiwan"))
@@ -34,10 +36,30 @@ class CsvCardImporterTest {
             "陳大華,\"ACME, Inc.\",0912345678,02-12345678,user@example.com,台北市,客戶\r\n"
 
         val card = CsvCardImporter.parse(csv.toByteArray()).single()
-        assertEquals("ACME, Inc.", card.company)
+        assertEquals("ACME, Inc.", card.companyEn)
         assertEquals("0912345678", card.mobile)
         assertEquals("02-12345678", card.phone)
         assertEquals("user@example.com", card.email)
+    }
+
+    @Test
+    fun importsExplicitBilingualColumns() {
+        val csv = "姓名(中文),姓名(英文),公司(中文),公司(英文),職稱\r\n" +
+            "王大明,David Wang,範例科技股份有限公司,EXAMPLE TECHNOLOGY CO. LTD.,業務經理\r\n"
+
+        val card = CsvCardImporter.parse(csv.toByteArray()).single()
+        assertEquals("王大明", card.name)
+        assertEquals("David Wang", card.nameEn)
+        assertEquals("範例科技股份有限公司", card.company)
+        assertEquals("EXAMPLE TECHNOLOGY CO. LTD.", card.companyEn)
+    }
+
+    @Test
+    fun handlesMixedBilingualCompanyCell() {
+        val csv = "姓名,公司\r\n王大明,範例科技EXAMPLE TECHNOLOGY CO. LTD.\r\n"
+        val card = CsvCardImporter.parse(csv.toByteArray()).single()
+        assertEquals("範例科技", card.company)
+        assertEquals("EXAMPLE TECHNOLOGY CO. LTD.", card.companyEn)
     }
 
     @Test

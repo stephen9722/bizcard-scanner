@@ -14,8 +14,14 @@ data class BusinessCard(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
 
+    /** Chinese/local-language name. Kept as `name` for backward compatibility. */
     val name: String = "",
+    /** English/Latin-script name shown and searched separately from [name]. */
+    val nameEn: String = "",
+    /** Chinese/local-language company. Kept as `company` for backward compatibility. */
     val company: String = "",
+    /** English/Latin-script company shown and searched separately from [company]. */
+    val companyEn: String = "",
     val title: String = "",
     val department: String = "",
     val phone: String = "",
@@ -42,7 +48,11 @@ data class BusinessCard(
     val tagList: List<String>
         get() = tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }
 
-    /** What to show in the list when OCR found no name. */
+    /** Preferred name for compact UI; Chinese/local name first, then English. */
     val displayName: String
-        get() = name.ifBlank { company }.ifBlank { "(未命名名片)" }
+        get() = name.ifBlank { nameEn }.ifBlank { company }.ifBlank { companyEn }.ifBlank { "(未命名名片)" }
+
+    /** Preferred company for list/grouping UI; Chinese/local company first, then English. */
+    val displayCompany: String
+        get() = company.ifBlank { companyEn }
 }

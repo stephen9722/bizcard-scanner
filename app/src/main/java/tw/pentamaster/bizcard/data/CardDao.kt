@@ -29,19 +29,14 @@ interface CardDao {
     @Query("SELECT * FROM cards ORDER BY updatedAt DESC")
     suspend fun allOnce(): List<BusinessCard>
 
-    /**
-     * Keyword search across every field the user might remember, including the raw OCR
-     * text — so "那個穿藍色制服的公司" still turns up if any of those characters were on
-     * the card, even when the parser put them in the wrong field.
-     *
-     * `:q` MUST be pre-escaped by [CardRepository.escapeLike] so that a user typing
-     * "50%" searches for a literal percent sign instead of matching everything.
-     */
+    /** Keyword search includes both local-language and English name/company fields. */
     @Query(
         """
         SELECT * FROM cards WHERE
             name          LIKE '%' || :q || '%' ESCAPE '\'
+         OR nameEn        LIKE '%' || :q || '%' ESCAPE '\'
          OR company       LIKE '%' || :q || '%' ESCAPE '\'
+         OR companyEn     LIKE '%' || :q || '%' ESCAPE '\'
          OR title         LIKE '%' || :q || '%' ESCAPE '\'
          OR department    LIKE '%' || :q || '%' ESCAPE '\'
          OR phone         LIKE '%' || :q || '%' ESCAPE '\'
@@ -72,10 +67,7 @@ interface CardDao {
     @Query("SELECT COUNT(*) FROM cards")
     fun count(): Flow<Int>
 
-    /**
-     * Possible duplicate: same non-blank email, or same non-blank mobile.
-     * Deliberately not matching on name alone — 陳志明 is not a unique key.
-     */
+    /** Possible duplicate: same non-blank email, or same non-blank mobile. */
     @Query(
         """
         SELECT * FROM cards WHERE id != :selfId AND (

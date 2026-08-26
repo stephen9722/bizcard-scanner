@@ -33,7 +33,6 @@ fun CardEditScreen(
     onSaved: (Long) -> Unit,
     onBack: () -> Unit
 ) {
-    // id 0 means "use the draft the camera just filled in" — reloading would wipe it.
     LaunchedEffect(cardId) {
         if (cardId != 0L) vm.loadForEdit(cardId)
     }
@@ -93,8 +92,22 @@ fun CardEditScreen(
                 }
             }
 
-            Field("姓名", card.name) { v -> vm.updateDraft { it.copy(name = v) } }
-            Field("公司", card.company) { v -> vm.updateDraft { it.copy(company = v) } }
+            Text(
+                "姓名",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+            )
+            Field("姓名（中文）", card.name) { v -> vm.updateDraft { it.copy(name = v) } }
+            Field("Name (English)", card.nameEn) { v -> vm.updateDraft { it.copy(nameEn = v) } }
+
+            Text(
+                "公司",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+            )
+            Field("公司（中文）", card.company) { v -> vm.updateDraft { it.copy(company = v) } }
+            Field("Company (English)", card.companyEn) { v -> vm.updateDraft { it.copy(companyEn = v) } }
+
             Field("職稱", card.title) { v -> vm.updateDraft { it.copy(title = v) } }
             Field("部門", card.department) { v -> vm.updateDraft { it.copy(department = v) } }
             Field("手機", card.mobile, KeyboardType.Phone) { v -> vm.updateDraft { it.copy(mobile = v) } }
@@ -121,7 +134,7 @@ fun CardEditScreen(
                         Column(Modifier.weight(1f)) {
                             Text("儲存後加入 Google / 手機聯絡人")
                             Text(
-                                "會開啟 Android 系統聯絡人確認畫面。若儲存帳號是 Google，系統會再同步到 Google 聯絡人。",
+                                "會開啟 Android 系統聯絡人確認畫面；英文姓名與英文公司會一併保留在聯絡人備註。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

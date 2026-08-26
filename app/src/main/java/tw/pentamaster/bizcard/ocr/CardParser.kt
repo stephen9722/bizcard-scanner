@@ -3,28 +3,17 @@ package tw.pentamaster.bizcard.ocr
 import tw.pentamaster.bizcard.data.BusinessCard
 
 /**
- * Turns OCR lines into structured fields, tuned for Taiwanese business cards.
- *
- * Deliberately conservative: when a line can't be classified with confidence it is left
- * alone rather than guessed into the wrong field. Everything stays in rawText anyway, so
- * search still finds it and the user can correct it on the edit screen.
+ * Turns OCR lines into structured fields, tuned for Taiwanese bilingual business cards.
+ * Local/CJK and English names/companies are intentionally kept in separate fields.
  */
 object CardParser {
 
-    // 09xx-xxx-xxx, +886-9xx-xxx-xxx, 0912 345 678
     private val MOBILE = Regex("""(?:\+?886[-\s]?)?0?9\d{2}[-\s.]?\d{3}[-\s.]?\d{3}""")
-
-    // (03)5xx-xxxx, 03-5731234, 02-2345-6789, +886-3-5731234
-    // International format drops the domestic leading zero after +886.
     private val LANDLINE = Regex(
         """(?:(?:\+?886[-\s.]?\(?\d{1,2}\)?)|(?:\(?0\d{1,2}\)?))[-\s.]?\d{3,4}[-\s.]?\d{3,4}"""
     )
-
     private val EXTENSION = Regex("""(?:ext|EXT|Ext|分機|轉)\.?\s*#?\s*(\d{1,6})""")
-
     private val EMAIL = Regex("""[\w.+-]+@[\w-]+\.[\w.-]+""")
-
-    // Generic TLD support (.ai, .tech, .biz, country domains, etc.) instead of a fixed allow-list.
     private val WEBSITE = Regex(
         """(?i)(?:https?://)?(?:www\.)?[\w-]+(?:\.[\w-]+)*\.[a-z]{2,63}(?:[/:?#]\S*)?"""
     )
@@ -32,7 +21,9 @@ object CardParser {
     private val COMPANY_HINTS = listOf(
         "股份有限公司", "有限公司", "企業社", "工作室", "事務所", "實業", "工業", "科技",
         "國際", "集團", "企業", "公司", "電子", "設備", "機械", "貿易", "顧問",
-        "Co.", "Ltd", "Inc", "Corp", "Company", "Technolog", "Industr", "Group"
+        "Co.", " Co ", "Ltd", "Inc", "Corp", "Company", "Technolog", "Industr", "Group",
+        "Equipment", "Electronics", "Semiconductor", "Automation", "Solutions", "Systems",
+        "Manufacturing", "Enterprise"
     )
 
     private val TITLE_HINTS = listOf(
@@ -49,15 +40,13 @@ object CardParser {
     )
 
     private val ADDRESS_HINTS = listOf("市", "縣", "區", "鄉", "鎮", "路", "街", "段", "巷", "弄", "號", "樓", "F")
-
     private val FAX_LABEL = listOf("傳真", "FAX", "Fax", "fax", "F:")
     private val MOBILE_LABEL = listOf("手機", "行動", "Mobile", "MOBILE", "Cell", "M:", "M：")
     private val TEL_LABEL = listOf("電話", "TEL", "Tel", "tel", "Phone", "T:", "T：")
 
     fun parse(front: OcrResult, back: OcrResult = OcrResult.EMPTY): BusinessCard {
-        // Prefer whichever side produced more text as the "primary" side for field extraction
         val primary = if (back.lines.sumOf { it.text.length } > front.lines.sumOf { it.text.length }) back else front
-        val lines = (primary.lines + (if (primary === front) back.lines else front.lines))
+        val lines = primary.lines + (if (primary === front) back.lines else front.lines)
 
         var email = ""
         var website = ""
@@ -66,18 +55,17 @@ object CardParser {
         var fax = ""
         var address = ""
         var company = ""
+        var companyEn = ""
         var title = ""
         var department = ""
 
         val consumed = mutableSetOf<Int>()
 
         lines.forEachIndexed { idx, line ->
-            val t = line.text
+            val t = line.text.trim()
+            if (t.isBlank()) return@forEachIndexed
             var contactMatched = false
 
-            // A single OCR line often contains several contact fields, e.g.
-            // "T: 03-...  F: 03-...  M: 09...". Extract each labelled value from
-            // the text after its own label instead of consuming the line after the first match.
             if (email.isBlank()) {
                 EMAIL.find(t)?.let { email = it.value; contactMatched = true }
             }
@@ -102,8 +90,6 @@ object CardParser {
                 }
             }
 
-            // Only use the generic first-number fallback on an unlabelled line. Otherwise a
-            // fax-only line could accidentally fill the phone field with the same number.
             val hasPhoneLabel = labelledFax != null || labelledMobile != null || labelledTel != null ||
                 FAX_LABEL.any { t.contains(it) } || MOBILE_LABEL.any { t.contains(it) } ||
                 TEL_LABEL.any { t.contains(it) }
@@ -112,8 +98,7 @@ object CardParser {
                 val landlineMatch = LANDLINE.find(t)?.value
                 when {
                     mobile.isBlank() && mobileMatch != null && isMobileShape(mobileMatch) -> {
-                        mobile = clean(mobileMatch)
-                        contactMatched = true
+                        mobile = clean(mobileMatch); contactMatched = true
                     }
                     phone.isBlank() && landlineMatch != null -> {
                         val ext = extensionAfter(t, landlineMatch)
@@ -138,24 +123,36 @@ object CardParser {
                 return@forEachIndexed
             }
 
-            if (company.isBlank() && COMPANY_HINTS.any { t.contains(it, ignoreCase = true) }) {
-                company = t; consumed += idx; return@forEachIndexed
+            if ((company.isBlank() || companyEn.isBlank()) && looksLikeCompany(t)) {
+                val split = splitBilingual(t)
+                when {
+                    split != null -> {
+                        if (company.isBlank()) company = split.first
+                        if (companyEn.isBlank()) companyEn = split.second
+                    }
+                    t.any { it.isCjk() } && company.isBlank() -> company = t
+                    t.any { it.isAsciiLetter() } && companyEn.isBlank() -> companyEn = t
+                }
+                consumed += idx
+                return@forEachIndexed
             }
 
-            if (title.isBlank() && TITLE_HINTS.any { t.contains(it, ignoreCase = true) } && t.length <= 24) {
+            if (title.isBlank() && TITLE_HINTS.any { t.contains(it, ignoreCase = true) } && t.length <= 40) {
                 title = t; consumed += idx; return@forEachIndexed
             }
 
-            if (department.isBlank() && DEPT_HINTS.any { t.contains(it, ignoreCase = true) } && t.length <= 24) {
+            if (department.isBlank() && DEPT_HINTS.any { t.contains(it, ignoreCase = true) } && t.length <= 40) {
                 department = t; consumed += idx
             }
         }
 
-        val name = guessName(lines, consumed)
+        val (name, nameEn) = guessNames(lines, consumed)
 
         return BusinessCard(
             name = name,
+            nameEn = nameEn,
             company = company,
+            companyEn = companyEn,
             title = title,
             department = department,
             phone = phone,
@@ -169,45 +166,108 @@ object CardParser {
         )
     }
 
-    /**
-     * The person's name is almost always the largest text on a Taiwanese card, and it is
-     * almost always 2–4 Chinese characters. Combining "tall" with "short and CJK" is far
-     * more reliable than either signal alone — a company name is often equally tall but
-     * much longer, and a 3-character department label is short but small.
-     */
-    private fun guessName(lines: List<OcrLine>, consumed: Set<Int>): String {
-        val candidates = lines.filterIndexed { i, _ -> i !in consumed }
-            .filter { it.text.length in 2..18 }
-            .filter { !it.text.any { c -> c.isDigit() } }
-            .filter { line -> COMPANY_HINTS.none { line.text.contains(it, ignoreCase = true) } }
-            .filter { line -> TITLE_HINTS.none { line.text.contains(it, ignoreCase = true) } }
+    /** Returns local/CJK name to English/Latin name. */
+    private fun guessNames(lines: List<OcrLine>, consumed: Set<Int>): Pair<String, String> {
+        val candidates = lines.filterIndexed { i, line ->
+            i !in consumed && line.text.isNotBlank() && !line.text.any { it.isDigit() }
+        }.filterNot { line ->
+            looksLikeCompany(line.text) ||
+                TITLE_HINTS.any { line.text.contains(it, ignoreCase = true) } ||
+                DEPT_HINTS.any { line.text.contains(it, ignoreCase = true) }
+        }
 
-        if (candidates.isEmpty()) return ""
+        var zh = ""
+        var en = ""
+
+        candidates.sortedByDescending { it.height }.forEach { line ->
+            val split = splitBilingual(line.text) ?: return@forEach
+            if (zh.isBlank() && isLikelyChineseName(split.first)) zh = split.first
+            if (en.isBlank() && isLikelyEnglishName(split.second)) en = split.second
+        }
 
         val maxHeight = lines.maxOfOrNull { it.height }?.takeIf { it > 0 } ?: 1
 
-        return candidates.maxByOrNull { line ->
-            var score = (line.height.toDouble() / maxHeight) * 100
-            val cjk = line.text.count { it.code in 0x4E00..0x9FFF }
-            if (cjk in 2..4 && cjk == line.text.replace(" ", "").length) score += 60
-            else if (cjk in 2..4) score += 30
-            if (line.text.length <= 4) score += 15
-            score
-        }!!.text.trim()
+        if (zh.isBlank()) {
+            zh = candidates
+                .filter { isLikelyChineseName(it.text.trim()) }
+                .maxByOrNull { line ->
+                    val compact = line.text.replace(" ", "")
+                    (line.height.toDouble() / maxHeight) * 100 +
+                        if (compact.length in 2..4) 60 else 0
+                }
+                ?.text?.trim().orEmpty()
+        }
+
+        if (en.isBlank()) {
+            en = candidates
+                .filter { isLikelyEnglishName(it.text.trim()) }
+                .maxByOrNull { line ->
+                    val words = englishWords(line.text)
+                    var score = (line.height.toDouble() / maxHeight) * 100
+                    if (words.size in 2..3) score += 45
+                    if (words.all { w -> w.firstOrNull()?.isUpperCase() == true }) score += 15
+                    if (line.text.count(Char::isUpperCase) == line.text.count(Char::isLetter)) score -= 10
+                    score
+                }
+                ?.text?.trim().orEmpty()
+        }
+
+        return zh to en
     }
 
+    /** Corporate keywords are required; an all-uppercase person's name must stay a name. */
+    private fun looksLikeCompany(text: String): Boolean {
+        val t = text.trim()
+        return COMPANY_HINTS.any { t.contains(it, ignoreCase = true) }
+    }
+
+    /** Splits a mixed CJK/Latin line at the first script boundary. */
+    private fun splitBilingual(raw: String): Pair<String, String>? {
+        val text = raw.trim()
+        val firstCjk = text.indexOfFirst { it.isCjk() }
+        val firstLatin = text.indexOfFirst { it.isAsciiLetter() }
+        if (firstCjk < 0 || firstLatin < 0) return null
+
+        val zh: String
+        val en: String
+        if (firstCjk < firstLatin) {
+            zh = text.substring(0, firstLatin).trimLanguageBoundary()
+            en = text.substring(firstLatin).trimLanguageBoundary()
+        } else {
+            en = text.substring(0, firstCjk).trimLanguageBoundary()
+            zh = text.substring(firstCjk).trimLanguageBoundary()
+        }
+        return if (zh.any { it.isCjk() } && en.any { it.isAsciiLetter() }) zh to en else null
+    }
+
+    private fun isLikelyChineseName(text: String): Boolean {
+        val compact = text.replace(" ", "")
+        return compact.length in 2..4 && compact.all { it.isCjk() }
+    }
+
+    private fun isLikelyEnglishName(text: String): Boolean {
+        if (!text.any { it.isAsciiLetter() } || text.any { it.isDigit() }) return false
+        if (COMPANY_HINTS.any { text.contains(it, ignoreCase = true) }) return false
+        if (TITLE_HINTS.any { text.contains(it, ignoreCase = true) }) return false
+        if (DEPT_HINTS.any { text.contains(it, ignoreCase = true) }) return false
+        val words = englishWords(text)
+        if (words.size !in 1..4) return false
+        return text.all { it.isAsciiLetter() || it == ' ' || it == '-' || it == '\'' || it == '.' }
+    }
+
+    private fun englishWords(text: String): List<String> = text
+        .split(Regex("[\\s./]+"))
+        .map { it.trim('-', '\'', '.') }
+        .filter { word -> word.any { it.isAsciiLetter() } }
 
     private fun findAfterLabel(text: String, labels: List<String>, pattern: Regex): String? {
         labels.forEach { label ->
             val index = text.indexOf(label)
-            if (index >= 0) {
-                pattern.find(text.substring(index + label.length))?.let { return it.value }
-            }
+            if (index >= 0) pattern.find(text.substring(index + label.length))?.let { return it.value }
         }
         return null
     }
 
-    /** Extension belongs to the number before it, not to another number earlier on the line. */
     private fun extensionAfter(text: String, phoneValue: String): String? {
         val start = text.indexOf(phoneValue).takeIf { it >= 0 } ?: return null
         return EXTENSION.find(text.substring(start + phoneValue.length))?.groupValues?.get(1)
@@ -230,6 +290,12 @@ object CardParser {
         labels.forEach { out = out.replace(it, "") }
         return out.trimStart(':', '：', ' ', '.', '-').trim()
     }
+
+    private fun String.trimLanguageBoundary(): String =
+        trim().trim(' ', '/', '|', '·', ':', '：').trim()
+
+    private fun Char.isCjk(): Boolean = code in 0x4E00..0x9FFF
+    private fun Char.isAsciiLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
 
     private fun clean(s: String) = s.trim().replace(Regex("""\s+"""), "-").trim('-')
 }
