@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.pentamaster.bizcard.data.CsvCardImporter
+import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -37,5 +38,14 @@ class CsvCardImporterTest {
         assertEquals("0912345678", card.mobile)
         assertEquals("02-12345678", card.phone)
         assertEquals("user@example.com", card.email)
+    }
+
+    @Test
+    fun fallsBackToBig5ForLegacyChineseCsv() {
+        val csv = "姓名,公司,職稱\r\n林測試,範例科技,經理\r\n"
+        val card = CsvCardImporter.parse(csv.toByteArray(Charset.forName("Big5"))).single()
+        assertEquals("林測試", card.name)
+        assertEquals("範例科技", card.company)
+        assertEquals("經理", card.title)
     }
 }
