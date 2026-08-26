@@ -72,10 +72,5 @@ jobs:
           if gh release view v0.1.0-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "v0.1.0-beta already exists; keeping the existing versioned release."
           else
-            gh release create v0.1.0-beta \
-              release/BizCardScanner-v0.1.0-beta-debug.apk \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "BizCard Scanner v0.1.0-beta" \
-              --prerelease \
-              --notes "First installable beta. Includes offline business-card OCR, automatic card edge detection/perspective correction, local Room storage, import/export/backup, and the parser and reliability fixes validated by Android CI. This is a debug-signed beta APK intended for direct testing, not Play Store distribution."
+            gh release create v0.1.0-beta release/BizCardScanner-v0.1.0-beta-debug.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BizCard Scanner v0.1.0-beta" --prerelease --notes "First installable beta. Includes offline business-card OCR, automatic card edge detection/perspective correction, local Room storage, import/export/backup, and the parser and reliability fixes validated by Android CI. This is a debug-signed beta APK intended for direct testing, not Play Store distribution."
+          fi
