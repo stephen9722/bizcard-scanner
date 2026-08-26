@@ -29,12 +29,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import tw.pentamaster.bizcard.data.BusinessCard
 import tw.pentamaster.bizcard.util.ImageStore
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -150,17 +154,55 @@ fun CardListScreen(
                         onAction = onScan
                     )
 
-                else -> LazyColumn(
-                    contentPadding = PaddingValues(bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(1.dp)
-                ) {
-                    items(cards, key = { it.id }) { card ->
-                        CardRow(card) { onOpen(card.id) }
+                else -> {
+                    // The card holder reference UI groups cards by the day they were added.
+                    // Sort by createdAt here instead of updatedAt so editing an old card does not
+                    // make it jump to the top or appear under the wrong historical date section.
+                    val sections = remember(cards) {
+                        cards
+                            .sortedByDescending { it.createdAt }
+                            .groupBy { createdDateLabel(it.createdAt) }
+                    }
+
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 96.dp)
+                    ) {
+                        sections.forEach { (dateLabel, dayCards) ->
+                            item(key = "date-$dateLabel") {
+                                DateSectionHeader(dateLabel)
+                            }
+                            items(dayCards, key = { it.id }) { card ->
+                                CardRow(card) { onOpen(card.id) }
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun DateSectionHeader(date: String) {
+    Surface(color = MaterialTheme.colorScheme.surface) {
+        Text(
+            text = date,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp)
+        )
+    }
+}
+
+private fun createdDateLabel(createdAt: Long): String {
+    if (createdAt <= 0L) return "未設定日期"
+    return Instant.ofEpochMilli(createdAt)
+        .atZone(ZoneId.systemDefault())
+        .toLocalDate()
+        .format(DateTimeFormatter.ISO_LOCAL_DATE)
 }
 
 @Composable
