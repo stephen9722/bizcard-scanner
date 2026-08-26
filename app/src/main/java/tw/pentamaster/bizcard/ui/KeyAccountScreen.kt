@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -38,8 +37,8 @@ fun KeyAccountScreen(
 ) {
     val cards by vm.allCards.collectAsStateWithLifecycle()
     val accounts = remember(cards) { OrgAnalyzer.accounts(cards) }
-    var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
+    var selectedKey by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
     val selected = accounts.firstOrNull { it.key == selectedKey }
 
     BackHandler(enabled = selected != null) { selectedKey = null }
@@ -238,7 +237,7 @@ private fun OrgLevelRow(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            HorizontalDivider(Modifier.weight(1f))
+            HorizontalDivider(modifier = Modifier.weight(1f))
         }
         Spacer(Modifier.height(8.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
