@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,8 +24,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # The source bundle does not include gradle-wrapper.jar, so CI installs the
-      # pinned Gradle version explicitly instead of relying on ./gradlew.
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -48,29 +47,100 @@ jobs:
           retention-days: 30
 
   release-beta:
-    name: Publish v0.1.1-beta
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Publish v0.1.2-beta (fixed signed)
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
+    env:
+      BIZCARD_KEYSTORE_B64: ${{ secrets.BIZCARD_KEYSTORE_B64 }}
+      BIZCARD_KEYSTORE_PASSWORD: ${{ secrets.BIZCARD_KEYSTORE_PASSWORD }}
+      BIZCARD_KEY_ALIAS: ${{ secrets.BIZCARD_KEY_ALIAS }}
+      BIZCARD_KEY_PASSWORD: ${{ secrets.BIZCARD_KEY_PASSWORD }}
 
     steps:
-      - name: Download built APK
-        uses: actions/download-artifact@v4
+      - name: Check fixed signing secrets
+        id: signing
+        shell: bash
+        run: |
+          if [[ -n "$BIZCARD_KEYSTORE_B64" && -n "$BIZCARD_KEYSTORE_PASSWORD" && -n "$BIZCARD_KEY_ALIAS" && -n "$BIZCARD_KEY_PASSWORD" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Fixed beta signing secrets are not configured yet; signed release publishing is skipped."
+          fi
+
+      - name: Checkout source
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/setup-java@v4
         with:
-          name: BizCardScanner-debug
-          path: release
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        if: steps.signing.outputs.available == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Set up Android SDK tools
+        if: steps.signing.outputs.available == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 SDK
+        if: steps.signing.outputs.available == 'true'
+        run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0" >/dev/null
+
+      - name: Decode fixed signing keystore
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          KEYSTORE="$RUNNER_TEMP/bizcard-beta.p12"
+          printf '%s' "$BIZCARD_KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          echo "BIZCARD_SIGNING_STORE_FILE=$KEYSTORE" >> "$GITHUB_ENV"
+
+      - name: Build fixed-signed release APK
+        if: steps.signing.outputs.available == 'true'
+        run: gradle assembleRelease --stacktrace
+
+      - name: Verify APK signing certificate
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          APK="app/build/outputs/apk/release/app-release.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+
+      - name: Upload fixed-signed beta APK
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BizCardScanner-v0.1.2-beta-signed
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Prepare release APK
-        run: mv release/app-debug.apk release/BizCardScanner-v0.1.1-beta-debug.apk
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          mkdir -p release
+          cp app/build/outputs/apk/release/app-release.apk release/BizCardScanner-v0.1.2-beta.apk
 
       - name: Create beta release if missing
+        if: steps.signing.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          if gh release view v0.1.1-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "v0.1.1-beta already exists; keeping the existing versioned release."
+          if gh release view v0.1.2-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v0.1.2-beta already exists; keeping the existing fixed-signed release."
           else
-            gh release create v0.1.1-beta release/BizCardScanner-v0.1.1-beta-debug.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BizCard Scanner v0.1.1-beta" --prerelease --notes "Adds one-tap phone transfer: generate a complete ZIP backup and send it through Android's share sheet to Quick Share, Google Drive, LINE, Mail, or another compatible app. Includes all previous offline OCR, perspective correction, backup/import, parser, and reliability fixes. This is a debug-signed beta APK intended for direct testing, not Play Store distribution."
+            gh release create v0.1.2-beta release/BizCardScanner-v0.1.2-beta.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BizCard Scanner v0.1.2-beta" --prerelease --notes "First beta using the permanent BizCard signing key. After the one-time migration from the earlier ephemeral debug-signed betas, future betas signed with this same key can update in place. Includes one-tap phone transfer, offline OCR, perspective correction, import/export/backup, and reliability fixes."
           fi
