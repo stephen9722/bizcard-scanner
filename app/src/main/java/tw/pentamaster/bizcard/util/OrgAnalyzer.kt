@@ -82,16 +82,18 @@ object OrgAnalyzer {
         val t = title.trim().lowercase()
 
         return when {
-            t.containsAny(
-                "董事長", "執行長", "總經理", "總裁", "chairman", "chief executive",
-                "ceo", "president", "general manager", "managing director"
-            ) -> OrgLevel.EXECUTIVE
-
+            // Check vice-president variants before the generic word "president" so
+            // "Vice President" does not get promoted into the executive band.
             t.containsAny(
                 "副總", "協理", "處長", "廠長", "事業部主管", "營運長", "技術長", "財務長",
                 "vice president", "svp", "evp", "avp", "director", "head of", "chief operating",
                 "chief technology", "chief financial", "plant manager"
             ) -> OrgLevel.SENIOR_LEADER
+
+            t.containsAny(
+                "董事長", "執行長", "總經理", "總裁", "chairman", "chief executive",
+                "ceo", "president", "general manager", "managing director"
+            ) -> OrgLevel.EXECUTIVE
 
             t.containsAny(
                 "經理", "副理", "課長", "部長", "manager", "assistant manager", "section manager"
