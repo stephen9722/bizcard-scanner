@@ -21,8 +21,8 @@ android {
         applicationId = "tw.pentamaster.bizcard"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.3.1-beta"
+        versionCode = 7
+        versionName = "0.4.0-beta"
     }
 
     val betaSigning = if (
@@ -67,8 +67,6 @@ android {
     }
 }
 
-// Room writes the schema JSON here; commit it so you can write real migrations later
-// instead of wiping the user's cards on every version bump.
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -91,24 +89,19 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.7.7")
 
-    // Room
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
-    // CameraX
     implementation("androidx.camera:camera-core:1.3.4")
     implementation("androidx.camera:camera-camera2:1.3.4")
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("androidx.camera:camera-view:1.3.4")
 
-    // ML Kit - bundled Chinese model, works fully offline
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 
-    // Image loading
     implementation("io.coil-kt:coil-compose:2.6.0")
 
-    // ExifInterface for orientation-correct thumbnails
     implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     testImplementation("junit:junit:4.13.2")
