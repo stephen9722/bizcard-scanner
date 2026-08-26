@@ -26,6 +26,8 @@ After the secrets are configured, open **Actions → Android CI → Run workflow
 5. upload the signed APK as a workflow artifact; and
 6. create the matching prerelease tag/release if it does not already exist.
 
+The current fixed-signing release line is `v0.3.0-beta`.
+
 ## Key custody
 
 Keep the permanent keystore in at least two private backup locations. Losing the key prevents future APKs from updating installations signed with that key. Replacing the key requires users to uninstall the old app before installing the newly signed build.
