@@ -12,12 +12,14 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Detects the four long outer edges of a business card and rectifies the perspective before OCR.
+ * Detects a business card, crops it, and rectifies perspective before OCR.
  *
- * This intentionally has no OpenCV/JNI dependency. The app targets current Android releases and
- * stays free of an extra native library/ABI surface. The detector is tuned for the capture screen:
- * a landscape business card filling most of the horizontal guide. If confidence is low, the
- * original photo is left untouched and OCR simply runs on it as before.
+ * The normal pass is tuned for a card that fills most of the camera guide. If that fails, a
+ * second pass accepts a much smaller but strongly rectangular card. The distant pass keeps
+ * several candidate edges instead of trusting only the strongest line, because text printed
+ * inside a small card can otherwise look stronger than the outer border. Candidate combinations
+ * are filtered by card geometry, then the best coarse result is cropped, enlarged, and sent
+ * through the strict detector again before the original image is perspective-rectified.
  */
 object CardImageProcessor {
 
@@ -39,7 +41,12 @@ object CardImageProcessor {
         val bottomRight: DPoint,
         val bottomLeft: DPoint,
         val confidence: Double
-    )
+    ) {
+        val points: List<DPoint>
+            get() = listOf(topLeft, topRight, bottomRight, bottomLeft)
+    }
+
+    private enum class DetectionMode { NORMAL, DISTANT }
 
     fun rectifyInPlace(file: File): Result {
         if (!file.exists() || file.length() <= 0L) return Result(false)
@@ -56,13 +63,7 @@ object CardImageProcessor {
             val detectorSize = detectorDimensions(source.width, source.height, DETECTION_EDGE)
             val sx = source.width.toDouble() / detectorSize.first.toDouble()
             val sy = source.height.toDouble() / detectorSize.second.toDouble()
-
-            val srcQuad = listOf(
-                DPoint(quad.topLeft.x * sx, quad.topLeft.y * sy),
-                DPoint(quad.topRight.x * sx, quad.topRight.y * sy),
-                DPoint(quad.bottomRight.x * sx, quad.bottomRight.y * sy),
-                DPoint(quad.bottomLeft.x * sx, quad.bottomLeft.y * sy)
-            )
+            val srcQuad = quad.points.map { DPoint(it.x * sx, it.y * sy) }
 
             val rectified = rectify(source, srcQuad) ?: return Result(false, quad.confidence)
             try {
@@ -148,10 +149,81 @@ object CardImageProcessor {
         return Bitmap.createScaledBitmap(source, dims.first, dims.second, true)
     }
 
+    /** May enlarge a small ROI for a second, more accurate pass. */
+    private fun scaleForRefinement(source: Bitmap): Bitmap {
+        val longest = max(source.width, source.height)
+        if (longest <= 0) return source
+        val wanted = REFINEMENT_EDGE.toDouble() / longest.toDouble()
+        val scale = wanted.coerceIn(1.0, MAX_REFINEMENT_SCALE)
+        if (scale <= 1.01) return source
+        val width = max(1, (source.width * scale).roundToInt())
+        val height = max(1, (source.height * scale).roundToInt())
+        return Bitmap.createScaledBitmap(source, width, height, true)
+    }
+
     private fun detectCard(bitmap: Bitmap): Quad? {
+        detectCandidate(bitmap, DetectionMode.NORMAL)?.let { return it }
+
+        val coarse = detectCandidate(bitmap, DetectionMode.DISTANT) ?: return null
+        val refined = refineDistantCandidate(bitmap, coarse)
+        if (refined != null) return refined
+
+        // A very strong coarse candidate is safer than leaving a clearly visible small card
+        // uncropped. Marginal candidates are still rejected when refinement cannot confirm them.
+        return coarse.takeIf { it.confidence >= DISTANT_FALLBACK_CONFIDENCE }
+    }
+
+    private fun refineDistantCandidate(bitmap: Bitmap, coarse: Quad): Quad? {
+        val xs = coarse.points.map { it.x }
+        val ys = coarse.points.map { it.y }
+        val rawMinX = xs.minOrNull() ?: return null
+        val rawMaxX = xs.maxOrNull() ?: return null
+        val rawMinY = ys.minOrNull() ?: return null
+        val rawMaxY = ys.maxOrNull() ?: return null
+        val cardWidth = rawMaxX - rawMinX
+        val cardHeight = rawMaxY - rawMinY
+        if (cardWidth < 40.0 || cardHeight < 24.0) return null
+
+        val padX = cardWidth * DISTANT_ROI_PADDING
+        val padY = cardHeight * DISTANT_ROI_PADDING
+        val left = (rawMinX - padX).roundToInt().coerceIn(0, bitmap.width - 2)
+        val top = (rawMinY - padY).roundToInt().coerceIn(0, bitmap.height - 2)
+        val right = (rawMaxX + padX).roundToInt().coerceIn(left + 2, bitmap.width)
+        val bottom = (rawMaxY + padY).roundToInt().coerceIn(top + 2, bitmap.height)
+        val cropWidth = right - left
+        val cropHeight = bottom - top
+        if (cropWidth < 80 || cropHeight < 60) return null
+
+        val crop = try {
+            Bitmap.createBitmap(bitmap, left, top, cropWidth, cropHeight)
+        } catch (_: Throwable) {
+            return null
+        }
+
+        var refinedBitmap: Bitmap? = null
+        return try {
+            refinedBitmap = scaleForRefinement(crop)
+            val local = detectCandidate(refinedBitmap, DetectionMode.NORMAL) ?: return null
+            val sx = cropWidth.toDouble() / refinedBitmap.width.toDouble()
+            val sy = cropHeight.toDouble() / refinedBitmap.height.toDouble()
+            fun map(p: DPoint) = DPoint(left + p.x * sx, top + p.y * sy)
+            Quad(
+                topLeft = map(local.topLeft),
+                topRight = map(local.topRight),
+                bottomRight = map(local.bottomRight),
+                bottomLeft = map(local.bottomLeft),
+                confidence = max(coarse.confidence, local.confidence)
+            )
+        } finally {
+            if (refinedBitmap != null && refinedBitmap !== crop) refinedBitmap.recycle()
+            if (crop !== bitmap) crop.recycle()
+        }
+    }
+
+    private fun detectCandidate(bitmap: Bitmap, mode: DetectionMode): Quad? {
         val width = bitmap.width
         val height = bitmap.height
-        if (width < 240 || height < 240) return null
+        if (width < 180 || height < 140) return null
 
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
@@ -200,23 +272,84 @@ object CardImageProcessor {
         val meanX = max(1.0, sumX.toDouble() / samples)
         val meanY = max(1.0, sumY.toDouble() / samples)
 
-        val top = bestHorizontal(
-            gradY, width, height,
-            (height * 0.14).roundToInt(), (height * 0.48).roundToInt(), meanY
-        )
-        val bottom = bestHorizontal(
-            gradY, width, height,
-            (height * 0.52).roundToInt(), (height * 0.86).roundToInt(), meanY
-        )
-        val left = bestVertical(
-            gradX, width, height,
-            (width * 0.04).roundToInt(), (width * 0.42).roundToInt(), meanX
-        )
-        val right = bestVertical(
-            gradX, width, height,
-            (width * 0.58).roundToInt(), (width * 0.96).roundToInt(), meanX
-        )
+        val topRange = if (mode == DetectionMode.NORMAL) 0.14 to 0.48 else 0.06 to 0.49
+        val bottomRange = if (mode == DetectionMode.NORMAL) 0.52 to 0.86 else 0.51 to 0.94
+        val leftRange = if (mode == DetectionMode.NORMAL) 0.04 to 0.42 else 0.02 to 0.49
+        val rightRange = if (mode == DetectionMode.NORMAL) 0.58 to 0.96 else 0.51 to 0.98
 
+        val topMin = (height * topRange.first).roundToInt()
+        val topMax = (height * topRange.second).roundToInt()
+        val bottomMin = (height * bottomRange.first).roundToInt()
+        val bottomMax = (height * bottomRange.second).roundToInt()
+        val leftMin = (width * leftRange.first).roundToInt()
+        val leftMax = (width * leftRange.second).roundToInt()
+        val rightMin = (width * rightRange.first).roundToInt()
+        val rightMax = (width * rightRange.second).roundToInt()
+
+        if (mode == DetectionMode.NORMAL) {
+            return buildQuad(
+                bestHorizontal(gradY, width, height, topMin, topMax, meanY),
+                bestHorizontal(gradY, width, height, bottomMin, bottomMax, meanY),
+                bestVertical(gradX, width, height, leftMin, leftMax, meanX),
+                bestVertical(gradX, width, height, rightMin, rightMax, meanX),
+                width, height, meanX, meanY, mode
+            )
+        }
+
+        val topLines = horizontalCandidates(
+            gradY, width, height, topMin, topMax, meanY, DISTANT_HORIZONTAL_CANDIDATES
+        )
+        val bottomLines = horizontalCandidates(
+            gradY, width, height, bottomMin, bottomMax, meanY, DISTANT_HORIZONTAL_CANDIDATES
+        )
+        val leftLines = verticalCandidates(
+            gradX, width, height, leftMin, leftMax, meanX, DISTANT_VERTICAL_CANDIDATES
+        )
+        val rightLines = verticalCandidates(
+            gradX, width, height, rightMin, rightMax, meanX, DISTANT_VERTICAL_CANDIDATES
+        )
+        if (topLines.isEmpty() || bottomLines.isEmpty() || leftLines.isEmpty() || rightLines.isEmpty()) {
+            return null
+        }
+
+        var best: Quad? = null
+        var bestQuality = 0.0
+        for (top in topLines) {
+            for (bottom in bottomLines) {
+                for (left in leftLines) {
+                    for (right in rightLines) {
+                        val quad = buildQuad(
+                            top, bottom, left, right,
+                            width, height, meanX, meanY, mode
+                        ) ?: continue
+                        val areaFraction = PerspectiveMath.polygonArea(quad.points) /
+                            (width.toDouble() * height.toDouble())
+                        // Prefer a strong candidate, while slightly favoring a larger outer frame
+                        // over a small rectangular logo or text block inside the business card.
+                        val sizeWeight = 0.75 + 0.25 * min(1.0, areaFraction / 0.14)
+                        val quality = quad.confidence * sizeWeight
+                        if (quality > bestQuality) {
+                            bestQuality = quality
+                            best = quad
+                        }
+                    }
+                }
+            }
+        }
+        return best
+    }
+
+    private fun buildQuad(
+        top: EdgeLine,
+        bottom: EdgeLine,
+        left: EdgeLine,
+        right: EdgeLine,
+        width: Int,
+        height: Int,
+        meanX: Double,
+        meanY: Double,
+        mode: DetectionMode
+    ): Quad? {
         val tl = intersect(top, left, width, height) ?: return null
         val tr = intersect(top, right, width, height) ?: return null
         val br = intersect(bottom, right, width, height) ?: return null
@@ -229,12 +362,16 @@ object CardImageProcessor {
         val rightHeight = PerspectiveMath.distance(tr, br)
         val avgWidth = (topWidth + bottomWidth) / 2.0
         val avgHeight = (leftHeight + rightHeight) / 2.0
-        if (avgHeight < 1.0) return null
+        if (avgHeight < 1.0 || avgWidth < 1.0) return null
 
         val aspect = avgWidth / avgHeight
         val areaFraction = PerspectiveMath.polygonArea(points) / (width.toDouble() * height.toDouble())
         val widthFraction = avgWidth / width.toDouble()
         val heightFraction = avgHeight / height.toDouble()
+        val widthBalance = min(topWidth, bottomWidth) / max(topWidth, bottomWidth)
+        val heightBalance = min(leftHeight, rightHeight) / max(leftHeight, rightHeight)
+        val centerX = points.sumOf { it.x } / 4.0 / width.toDouble()
+        val centerY = points.sumOf { it.y } / 4.0 / height.toDouble()
 
         val marginX = width * 0.04
         val marginY = height * 0.04
@@ -242,14 +379,26 @@ object CardImageProcessor {
             it.x >= -marginX && it.x <= width + marginX &&
                 it.y >= -marginY && it.y <= height + marginY
         }
+        if (!allInside || tr.x <= tl.x || br.x <= bl.x || bl.y <= tl.y || br.y <= tr.y) {
+            return null
+        }
 
-        if (!allInside ||
-            aspect !in 1.22..2.20 ||
-            areaFraction !in 0.14..0.78 ||
-            widthFraction !in 0.45..1.02 ||
-            heightFraction !in 0.18..0.78 ||
-            tr.x <= tl.x || br.x <= bl.x || bl.y <= tl.y || br.y <= tr.y
-        ) return null
+        val geometryOk = if (mode == DetectionMode.NORMAL) {
+            aspect in 1.22..2.20 &&
+                areaFraction in 0.14..0.78 &&
+                widthFraction in 0.45..1.02 &&
+                heightFraction in 0.18..0.78
+        } else {
+            aspect in 1.28..2.12 &&
+                areaFraction in 0.025..0.46 &&
+                widthFraction in 0.20..0.82 &&
+                heightFraction in 0.09..0.58 &&
+                widthBalance >= 0.68 &&
+                heightBalance >= 0.68 &&
+                centerX in 0.12..0.88 &&
+                centerY in 0.12..0.88
+        }
+        if (!geometryOk) return null
 
         val confidence = minOf(
             top.score / meanY,
@@ -257,20 +406,26 @@ object CardImageProcessor {
             left.score / meanX,
             right.score / meanX
         )
-        if (confidence < MIN_CONFIDENCE) return null
+        val requiredConfidence = if (mode == DetectionMode.NORMAL) {
+            MIN_CONFIDENCE
+        } else {
+            DISTANT_MIN_CONFIDENCE
+        }
+        if (confidence < requiredConfidence) return null
 
         return Quad(tl, tr, br, bl, confidence)
     }
 
-    private fun bestHorizontal(
+    private fun horizontalCandidates(
         gradient: IntArray,
         width: Int,
         height: Int,
         minBase: Int,
         maxBase: Int,
-        globalMean: Double
-    ): EdgeLine {
-        var best = EdgeLine(height / 2.0, 0.0, 0.0)
+        globalMean: Double,
+        limit: Int
+    ): List<EdgeLine> {
+        val all = ArrayList<EdgeLine>()
         val centerX = (width - 1) / 2.0
         val xStart = (width * 0.07).roundToInt().coerceAtLeast(2)
         val xEnd = (width * 0.93).roundToInt().coerceAtMost(width - 3)
@@ -301,24 +456,25 @@ object CardImageProcessor {
                 if (count > 0) {
                     val continuity = strong.toDouble() / count.toDouble()
                     val score = (sum / count.toDouble()) * (0.65 + 0.35 * continuity)
-                    if (score > best.score) best = EdgeLine(base.toDouble(), slope, score)
+                    all += EdgeLine(base.toDouble(), slope, score)
                 }
                 base += 3
             }
             slope += SLOPE_STEP
         }
-        return best
+        return distinctStrongLines(all, limit, max(6.0, height * CANDIDATE_BASE_GAP))
     }
 
-    private fun bestVertical(
+    private fun verticalCandidates(
         gradient: IntArray,
         width: Int,
         height: Int,
         minBase: Int,
         maxBase: Int,
-        globalMean: Double
-    ): EdgeLine {
-        var best = EdgeLine(width / 2.0, 0.0, 0.0)
+        globalMean: Double,
+        limit: Int
+    ): List<EdgeLine> {
+        val all = ArrayList<EdgeLine>()
         val centerY = (height - 1) / 2.0
         val yStart = (height * 0.18).roundToInt().coerceAtLeast(2)
         val yEnd = (height * 0.82).roundToInt().coerceAtMost(height - 3)
@@ -349,14 +505,52 @@ object CardImageProcessor {
                 if (count > 0) {
                     val continuity = strong.toDouble() / count.toDouble()
                     val score = (sum / count.toDouble()) * (0.65 + 0.35 * continuity)
-                    if (score > best.score) best = EdgeLine(base.toDouble(), slope, score)
+                    all += EdgeLine(base.toDouble(), slope, score)
                 }
                 base += 3
             }
             slope += SLOPE_STEP
         }
-        return best
+        return distinctStrongLines(all, limit, max(6.0, width * CANDIDATE_BASE_GAP))
     }
+
+    private fun distinctStrongLines(
+        all: List<EdgeLine>,
+        limit: Int,
+        minBaseGap: Double
+    ): List<EdgeLine> {
+        if (limit <= 0) return emptyList()
+        val result = ArrayList<EdgeLine>(limit)
+        for (candidate in all.sortedByDescending { it.score }) {
+            if (result.none { abs(it.base - candidate.base) < minBaseGap }) {
+                result += candidate
+                if (result.size >= limit) break
+            }
+        }
+        return result
+    }
+
+    private fun bestHorizontal(
+        gradient: IntArray,
+        width: Int,
+        height: Int,
+        minBase: Int,
+        maxBase: Int,
+        globalMean: Double
+    ): EdgeLine = horizontalCandidates(
+        gradient, width, height, minBase, maxBase, globalMean, 1
+    ).firstOrNull() ?: EdgeLine(height / 2.0, 0.0, 0.0)
+
+    private fun bestVertical(
+        gradient: IntArray,
+        width: Int,
+        height: Int,
+        minBase: Int,
+        maxBase: Int,
+        globalMean: Double
+    ): EdgeLine = verticalCandidates(
+        gradient, width, height, minBase, maxBase, globalMean, 1
+    ).firstOrNull() ?: EdgeLine(width / 2.0, 0.0, 0.0)
 
     /** Intersects y = hSlope*x+hB with x = vSlope*y+vD. */
     private fun intersect(
@@ -477,8 +671,16 @@ object CardImageProcessor {
 
     private const val MAX_SOURCE_EDGE = 2600
     private const val DETECTION_EDGE = 900
+    private const val REFINEMENT_EDGE = 900
+    private const val MAX_REFINEMENT_SCALE = 3.0
+    private const val DISTANT_ROI_PADDING = 0.24
+    private const val CANDIDATE_BASE_GAP = 0.025
+    private const val DISTANT_HORIZONTAL_CANDIDATES = 6
+    private const val DISTANT_VERTICAL_CANDIDATES = 8
     private const val MAX_OUTPUT_EDGE = 2200.0
     private const val MAX_SLOPE = 0.34
     private const val SLOPE_STEP = 0.04
     private const val MIN_CONFIDENCE = 1.55
+    private const val DISTANT_MIN_CONFIDENCE = 1.70
+    private const val DISTANT_FALLBACK_CONFIDENCE = 2.25
 }
