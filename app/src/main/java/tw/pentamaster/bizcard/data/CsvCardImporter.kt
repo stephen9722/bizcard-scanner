@@ -48,7 +48,7 @@ object CsvCardImporter {
                 val family = value(row, "姓", "姓氏", "Last Name", "Family Name")
                 val given = value(row, "名字", "名", "First Name", "Given Name")
                 val combined = (family + given).trim()
-                if (combined.any(Char::isCjk)) name = combined
+                if (combined.any { it.isCjk() }) name = combined
                 else if (nameEn.isBlank()) nameEn = listOf(given, family).filter { it.isNotBlank() }.joinToString(" ")
             }
 
