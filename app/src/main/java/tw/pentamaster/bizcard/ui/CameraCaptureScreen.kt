@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -39,8 +40,9 @@ import java.util.concurrent.Executors
 private enum class Side { FRONT, BACK }
 
 /**
- * Two-step capture: front, then optionally back. Both photos are OCR'd and merged into
- * one draft card before handing off to the edit screen.
+ * Two-step capture/import: front, then optionally back. Each side may come from CameraX
+ * or Android Photo Picker. Both routes copy the image into app-private storage and run
+ * the same perspective-correction + offline OCR pipeline before handing off to edit.
  */
 @Composable
 fun CameraCaptureScreen(
@@ -63,17 +65,89 @@ fun CameraCaptureScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted -> hasPermission = granted }
 
-    LaunchedEffect(Unit) {
-        if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
-    }
-
     var side by remember { mutableStateOf(Side.FRONT) }
+    var pickerSide by remember { mutableStateOf(Side.FRONT) }
     var busy by remember { mutableStateOf(false) }
     var frontOcr by remember { mutableStateOf(OcrResult.EMPTY) }
     var keepDraft by remember { mutableStateOf(false) }
     var pendingFile by remember { mutableStateOf<File?>(null) }
     val keepDraftState = rememberUpdatedState(keepDraft)
     val pendingFileState = rememberUpdatedState(pendingFile)
+
+    suspend fun processTarget(target: File, targetSide: Side) {
+        try {
+            val ocr = withContext(Dispatchers.Default) {
+                // Gallery photos and CameraX photos intentionally use the exact same path.
+                // If edge confidence is low, rectification leaves the original untouched.
+                CardImageProcessor.rectifyInPlace(target)
+                CardOcr.read(context, target)
+            }
+            if (targetSide == Side.FRONT) {
+                frontOcr = ocr
+                vm.updateDraft { it.copy(frontImage = target.name) }
+                pendingFile = null
+                vm.mergeParsed(CardParser.parse(ocr))
+                side = Side.BACK
+                busy = false
+            } else {
+                vm.updateDraft { it.copy(backImage = target.name) }
+                pendingFile = null
+                vm.mergeParsed(CardParser.parse(frontOcr, ocr))
+                busy = false
+                keepDraft = true
+                onDone()
+            }
+        } catch (_: Exception) {
+            target.delete()
+            if (pendingFile == target) pendingFile = null
+            busy = false
+        }
+    }
+
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+
+        val targetSide = pickerSide
+        val target = ImageStore.newFile(
+            context,
+            if (targetSide == Side.FRONT) "front" else "back"
+        )
+        pendingFile = target
+        busy = true
+
+        scope.launch {
+            val copied = withContext(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    target.length() > 0L
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (!copied) {
+                target.delete()
+                if (pendingFile == target) pendingFile = null
+                busy = false
+            } else {
+                processTarget(target, targetSide)
+            }
+        }
+    }
+
+    fun pickFromGallery() {
+        pickerSide = side
+        photoPicker.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
 
     val imageCapture = remember {
         ImageCapture.Builder()
@@ -92,16 +166,19 @@ fun CameraCaptureScreen(
     if (!hasPermission) {
         PermissionPrompt(
             onGrant = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+            onPickImage = { pickFromGallery() },
             onManualEntry = {
                 keepDraft = true
                 onManualEntry()
             }
         )
+        if (busy) {
+            BusyOverlay()
+        }
         return
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -123,7 +200,7 @@ fun CameraCaptureScreen(
                             imageCapture
                         )
                     } catch (_: Exception) {
-                        // Device has no usable back camera; the shutter will simply do nothing.
+                        // Device has no usable back camera; gallery import still works.
                     }
                 }, ContextCompat.getMainExecutor(ctx))
                 previewView
@@ -140,7 +217,7 @@ fun CameraCaptureScreen(
         )
 
         Text(
-            text = if (side == Side.FRONT) "拍攝正面" else "拍攝背面",
+            text = if (side == Side.FRONT) "名片正面" else "名片背面",
             color = Color.White,
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier
@@ -148,92 +225,98 @@ fun CameraCaptureScreen(
                 .padding(top = 56.dp)
         )
 
-        Row(
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(24.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TextButton(onClick = onCancel, enabled = !busy) {
-                Text("取消", color = Color.White)
-            }
-
-            Button(
-                enabled = !busy,
-                onClick = {
-                    busy = true
-                    val target = ImageStore.newFile(
-                        context,
-                        if (side == Side.FRONT) "front" else "back"
-                    )
-                    pendingFile = target
-                    takePhoto(imageCapture, target, executor,
-                        onError = {
-                            target.delete()
-                            if (pendingFile == target) pendingFile = null
-                            busy = false
-                        },
-                        onSaved = {
-                            scope.launch {
-                                val ocr = withContext(Dispatchers.Default) {
-                                    // Straighten/crop the card first. If edge confidence is low the
-                                    // processor leaves the original photo untouched, so OCR still works.
-                                    CardImageProcessor.rectifyInPlace(target)
-                                    CardOcr.read(context, target)
-                                }
-                                if (side == Side.FRONT) {
-                                    frontOcr = ocr
-                                    vm.updateDraft { it.copy(frontImage = target.name) }
-                                    pendingFile = null
-                                    vm.mergeParsed(CardParser.parse(ocr))
-                                    side = Side.BACK
-                                    busy = false
-                                } else {
-                                    vm.updateDraft { it.copy(backImage = target.name) }
-                                    pendingFile = null
-                                    vm.mergeParsed(CardParser.parse(frontOcr, ocr))
-                                    busy = false
-                                    keepDraft = true
-                                    onDone()
-                                }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        busy = true
+                        val targetSide = side
+                        val target = ImageStore.newFile(
+                            context,
+                            if (targetSide == Side.FRONT) "front" else "back"
+                        )
+                        pendingFile = target
+                        takePhoto(
+                            imageCapture,
+                            target,
+                            executor,
+                            onError = {
+                                target.delete()
+                                if (pendingFile == target) pendingFile = null
+                                busy = false
+                            },
+                            onSaved = {
+                                scope.launch { processTarget(target, targetSide) }
                             }
-                        }
-                    )
+                        )
+                    }
+                ) {
+                    Text(if (side == Side.FRONT) "拍正面" else "拍背面")
                 }
-            ) {
-                Text(if (side == Side.FRONT) "拍正面" else "拍背面")
+
+                OutlinedButton(
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    onClick = { pickFromGallery() }
+                ) {
+                    Text("從相簿選擇")
+                }
             }
 
-            TextButton(
-                enabled = !busy,
-                onClick = {
-                    if (side == Side.FRONT) {
-                        side = Side.BACK
-                    } else {
-                        keepDraft = true
-                        onDone()
-                    }
-                }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(if (side == Side.FRONT) "略過" else "完成", color = Color.White)
+                TextButton(onClick = onCancel, enabled = !busy) {
+                    Text("取消", color = Color.White)
+                }
+
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        if (side == Side.FRONT) {
+                            side = Side.BACK
+                        } else {
+                            keepDraft = true
+                            onDone()
+                        }
+                    }
+                ) {
+                    Text(if (side == Side.FRONT) "略過正面" else "完成", color = Color.White)
+                }
             }
         }
 
-        if (busy) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.55f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color.White)
-                    Spacer(Modifier.height(12.dp))
-                    Text("校正與辨識中…", color = Color.White)
-                }
-            }
+        if (busy) BusyOverlay()
+    }
+}
+
+@Composable
+private fun BusyOverlay() {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.55f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = Color.White)
+            Spacer(Modifier.height(12.dp))
+            Text("校正與辨識中…", color = Color.White)
         }
     }
 }
@@ -262,7 +345,11 @@ private fun takePhoto(
 }
 
 @Composable
-private fun PermissionPrompt(onGrant: () -> Unit, onManualEntry: () -> Unit) {
+private fun PermissionPrompt(
+    onGrant: () -> Unit,
+    onPickImage: () -> Unit,
+    onManualEntry: () -> Unit
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -270,16 +357,17 @@ private fun PermissionPrompt(onGrant: () -> Unit, onManualEntry: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("需要相機權限", style = MaterialTheme.typography.titleLarge)
+        Text("掃描或匯入名片", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(8.dp))
         Text(
-            "掃描名片要用到相機。照片只存在這支手機裡,不會上傳。",
+            "你可以允許相機直接拍攝，或不開相機權限、只從手機相簿選一張照片。照片只存在這支手機裡，不會上傳。",
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(20.dp))
         Button(onClick = onGrant) { Text("允許使用相機") }
+        OutlinedButton(onClick = onPickImage) { Text("從相簿選擇") }
         TextButton(onClick = onManualEntry) { Text("改成手動輸入") }
     }
 }
