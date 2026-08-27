@@ -117,7 +117,13 @@ fun CardEditScreen(
             Field("網站", card.website, KeyboardType.Uri) { v -> vm.updateDraft { it.copy(website = v) } }
             Field("地址", card.address, singleLine = false) { v -> vm.updateDraft { it.copy(address = v) } }
             Field("標籤(用逗號分隔)", card.tags) { v -> vm.updateDraft { it.copy(tags = v) } }
-            Field("備註", card.notes, singleLine = false) { v -> vm.updateDraft { it.copy(notes = v) } }
+            Field("補充說明（可搜尋）", card.notes, singleLine = false) { v -> vm.updateDraft { it.copy(notes = v) } }
+            Text(
+                "可記錄拜訪來源、展會、待追蹤事項或任何關鍵字；之後在名片搜尋直接找得到。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 6.dp)
+            )
 
             if (cardId == 0L) {
                 Spacer(Modifier.height(12.dp))
