@@ -12,12 +12,13 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Detects the four long outer edges of a business card and rectifies the perspective before OCR.
+ * Detects a business card, crops it, and rectifies perspective before OCR.
  *
- * This intentionally has no OpenCV/JNI dependency. The app targets current Android releases and
- * stays free of an extra native library/ABI surface. The detector is tuned for the capture screen:
- * a landscape business card filling most of the horizontal guide. If confidence is low, the
- * original photo is left untouched and OCR simply runs on it as before.
+ * The normal pass is tuned for a card that fills most of the camera guide. If that fails, a
+ * second pass accepts a much smaller but strongly rectangular card. That coarse distant-card
+ * result is used to crop a padded ROI, enlarge it, and run the strict detector again. This lets
+ * gallery photos with a small card on a desk be corrected without broadly lowering the normal
+ * detector's thresholds and increasing false crops.
  */
 object CardImageProcessor {
 
@@ -39,7 +40,12 @@ object CardImageProcessor {
         val bottomRight: DPoint,
         val bottomLeft: DPoint,
         val confidence: Double
-    )
+    ) {
+        val points: List<DPoint>
+            get() = listOf(topLeft, topRight, bottomRight, bottomLeft)
+    }
+
+    private enum class DetectionMode { NORMAL, DISTANT }
 
     fun rectifyInPlace(file: File): Result {
         if (!file.exists() || file.length() <= 0L) return Result(false)
@@ -56,13 +62,7 @@ object CardImageProcessor {
             val detectorSize = detectorDimensions(source.width, source.height, DETECTION_EDGE)
             val sx = source.width.toDouble() / detectorSize.first.toDouble()
             val sy = source.height.toDouble() / detectorSize.second.toDouble()
-
-            val srcQuad = listOf(
-                DPoint(quad.topLeft.x * sx, quad.topLeft.y * sy),
-                DPoint(quad.topRight.x * sx, quad.topRight.y * sy),
-                DPoint(quad.bottomRight.x * sx, quad.bottomRight.y * sy),
-                DPoint(quad.bottomLeft.x * sx, quad.bottomLeft.y * sy)
-            )
+            val srcQuad = quad.points.map { DPoint(it.x * sx, it.y * sy) }
 
             val rectified = rectify(source, srcQuad) ?: return Result(false, quad.confidence)
             try {
@@ -148,10 +148,84 @@ object CardImageProcessor {
         return Bitmap.createScaledBitmap(source, dims.first, dims.second, true)
     }
 
+    /**
+     * Unlike [scaleToMaxEdge], this may enlarge a small ROI for a second, more accurate pass.
+     * The scale cap prevents an extremely small false candidate from creating a huge bitmap.
+     */
+    private fun scaleForRefinement(source: Bitmap): Bitmap {
+        val longest = max(source.width, source.height)
+        if (longest <= 0) return source
+        val wanted = REFINEMENT_EDGE.toDouble() / longest.toDouble()
+        val scale = wanted.coerceIn(1.0, MAX_REFINEMENT_SCALE)
+        if (scale <= 1.01) return source
+        val width = max(1, (source.width * scale).roundToInt())
+        val height = max(1, (source.height * scale).roundToInt())
+        return Bitmap.createScaledBitmap(source, width, height, true)
+    }
+
     private fun detectCard(bitmap: Bitmap): Quad? {
+        detectCandidate(bitmap, DetectionMode.NORMAL)?.let { return it }
+
+        val coarse = detectCandidate(bitmap, DetectionMode.DISTANT) ?: return null
+        val refined = refineDistantCandidate(bitmap, coarse)
+        if (refined != null) return refined
+
+        // A very strong coarse candidate is safer than leaving a clearly visible small card
+        // uncropped. We still reject marginal distant candidates when refinement cannot confirm.
+        return coarse.takeIf { it.confidence >= DISTANT_FALLBACK_CONFIDENCE }
+    }
+
+    private fun refineDistantCandidate(bitmap: Bitmap, coarse: Quad): Quad? {
+        val xs = coarse.points.map { it.x }
+        val ys = coarse.points.map { it.y }
+        val rawMinX = xs.minOrNull() ?: return null
+        val rawMaxX = xs.maxOrNull() ?: return null
+        val rawMinY = ys.minOrNull() ?: return null
+        val rawMaxY = ys.maxOrNull() ?: return null
+        val cardWidth = rawMaxX - rawMinX
+        val cardHeight = rawMaxY - rawMinY
+        if (cardWidth < 40.0 || cardHeight < 24.0) return null
+
+        val padX = cardWidth * DISTANT_ROI_PADDING
+        val padY = cardHeight * DISTANT_ROI_PADDING
+        val left = (rawMinX - padX).roundToInt().coerceIn(0, bitmap.width - 2)
+        val top = (rawMinY - padY).roundToInt().coerceIn(0, bitmap.height - 2)
+        val right = (rawMaxX + padX).roundToInt().coerceIn(left + 2, bitmap.width)
+        val bottom = (rawMaxY + padY).roundToInt().coerceIn(top + 2, bitmap.height)
+        val cropWidth = right - left
+        val cropHeight = bottom - top
+        if (cropWidth < 80 || cropHeight < 60) return null
+
+        val crop = try {
+            Bitmap.createBitmap(bitmap, left, top, cropWidth, cropHeight)
+        } catch (_: Throwable) {
+            return null
+        }
+
+        var refinedBitmap: Bitmap? = null
+        return try {
+            refinedBitmap = scaleForRefinement(crop)
+            val local = detectCandidate(refinedBitmap, DetectionMode.NORMAL) ?: return null
+            val sx = cropWidth.toDouble() / refinedBitmap.width.toDouble()
+            val sy = cropHeight.toDouble() / refinedBitmap.height.toDouble()
+            fun map(p: DPoint) = DPoint(left + p.x * sx, top + p.y * sy)
+            Quad(
+                topLeft = map(local.topLeft),
+                topRight = map(local.topRight),
+                bottomRight = map(local.bottomRight),
+                bottomLeft = map(local.bottomLeft),
+                confidence = max(coarse.confidence, local.confidence)
+            )
+        } finally {
+            if (refinedBitmap != null && refinedBitmap !== crop) refinedBitmap.recycle()
+            if (crop !== bitmap) crop.recycle()
+        }
+    }
+
+    private fun detectCandidate(bitmap: Bitmap, mode: DetectionMode): Quad? {
         val width = bitmap.width
         val height = bitmap.height
-        if (width < 240 || height < 240) return null
+        if (width < 180 || height < 140) return null
 
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
@@ -200,21 +274,34 @@ object CardImageProcessor {
         val meanX = max(1.0, sumX.toDouble() / samples)
         val meanY = max(1.0, sumY.toDouble() / samples)
 
+        val topRange = if (mode == DetectionMode.NORMAL) 0.14 to 0.48 else 0.06 to 0.49
+        val bottomRange = if (mode == DetectionMode.NORMAL) 0.52 to 0.86 else 0.51 to 0.94
+        val leftRange = if (mode == DetectionMode.NORMAL) 0.04 to 0.42 else 0.02 to 0.49
+        val rightRange = if (mode == DetectionMode.NORMAL) 0.58 to 0.96 else 0.51 to 0.98
+
         val top = bestHorizontal(
             gradY, width, height,
-            (height * 0.14).roundToInt(), (height * 0.48).roundToInt(), meanY
+            (height * topRange.first).roundToInt(),
+            (height * topRange.second).roundToInt(),
+            meanY
         )
         val bottom = bestHorizontal(
             gradY, width, height,
-            (height * 0.52).roundToInt(), (height * 0.86).roundToInt(), meanY
+            (height * bottomRange.first).roundToInt(),
+            (height * bottomRange.second).roundToInt(),
+            meanY
         )
         val left = bestVertical(
             gradX, width, height,
-            (width * 0.04).roundToInt(), (width * 0.42).roundToInt(), meanX
+            (width * leftRange.first).roundToInt(),
+            (width * leftRange.second).roundToInt(),
+            meanX
         )
         val right = bestVertical(
             gradX, width, height,
-            (width * 0.58).roundToInt(), (width * 0.96).roundToInt(), meanX
+            (width * rightRange.first).roundToInt(),
+            (width * rightRange.second).roundToInt(),
+            meanX
         )
 
         val tl = intersect(top, left, width, height) ?: return null
@@ -229,12 +316,16 @@ object CardImageProcessor {
         val rightHeight = PerspectiveMath.distance(tr, br)
         val avgWidth = (topWidth + bottomWidth) / 2.0
         val avgHeight = (leftHeight + rightHeight) / 2.0
-        if (avgHeight < 1.0) return null
+        if (avgHeight < 1.0 || avgWidth < 1.0) return null
 
         val aspect = avgWidth / avgHeight
         val areaFraction = PerspectiveMath.polygonArea(points) / (width.toDouble() * height.toDouble())
         val widthFraction = avgWidth / width.toDouble()
         val heightFraction = avgHeight / height.toDouble()
+        val widthBalance = min(topWidth, bottomWidth) / max(topWidth, bottomWidth)
+        val heightBalance = min(leftHeight, rightHeight) / max(leftHeight, rightHeight)
+        val centerX = points.sumOf { it.x } / 4.0 / width.toDouble()
+        val centerY = points.sumOf { it.y } / 4.0 / height.toDouble()
 
         val marginX = width * 0.04
         val marginY = height * 0.04
@@ -242,14 +333,28 @@ object CardImageProcessor {
             it.x >= -marginX && it.x <= width + marginX &&
                 it.y >= -marginY && it.y <= height + marginY
         }
+        if (!allInside || tr.x <= tl.x || br.x <= bl.x || bl.y <= tl.y || br.y <= tr.y) {
+            return null
+        }
 
-        if (!allInside ||
-            aspect !in 1.22..2.20 ||
-            areaFraction !in 0.14..0.78 ||
-            widthFraction !in 0.45..1.02 ||
-            heightFraction !in 0.18..0.78 ||
-            tr.x <= tl.x || br.x <= bl.x || bl.y <= tl.y || br.y <= tr.y
-        ) return null
+        val geometryOk = if (mode == DetectionMode.NORMAL) {
+            aspect in 1.22..2.20 &&
+                areaFraction in 0.14..0.78 &&
+                widthFraction in 0.45..1.02 &&
+                heightFraction in 0.18..0.78
+        } else {
+            // Smaller candidates must look more like a real rectangular business card before they
+            // are allowed into the refinement pass.
+            aspect in 1.28..2.12 &&
+                areaFraction in 0.025..0.46 &&
+                widthFraction in 0.20..0.82 &&
+                heightFraction in 0.09..0.58 &&
+                widthBalance >= 0.68 &&
+                heightBalance >= 0.68 &&
+                centerX in 0.12..0.88 &&
+                centerY in 0.12..0.88
+        }
+        if (!geometryOk) return null
 
         val confidence = minOf(
             top.score / meanY,
@@ -257,7 +362,12 @@ object CardImageProcessor {
             left.score / meanX,
             right.score / meanX
         )
-        if (confidence < MIN_CONFIDENCE) return null
+        val requiredConfidence = if (mode == DetectionMode.NORMAL) {
+            MIN_CONFIDENCE
+        } else {
+            DISTANT_MIN_CONFIDENCE
+        }
+        if (confidence < requiredConfidence) return null
 
         return Quad(tl, tr, br, bl, confidence)
     }
@@ -477,8 +587,13 @@ object CardImageProcessor {
 
     private const val MAX_SOURCE_EDGE = 2600
     private const val DETECTION_EDGE = 900
+    private const val REFINEMENT_EDGE = 900
+    private const val MAX_REFINEMENT_SCALE = 3.0
+    private const val DISTANT_ROI_PADDING = 0.24
     private const val MAX_OUTPUT_EDGE = 2200.0
     private const val MAX_SLOPE = 0.34
     private const val SLOPE_STEP = 0.04
     private const val MIN_CONFIDENCE = 1.55
+    private const val DISTANT_MIN_CONFIDENCE = 1.70
+    private const val DISTANT_FALLBACK_CONFIDENCE = 2.25
 }
