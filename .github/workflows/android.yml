@@ -47,7 +47,7 @@ jobs:
           retention-days: 30
 
   release-beta:
-    name: Publish v0.4.0-beta (fixed signed)
+    name: Publish v0.4.1-beta (fixed signed)
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-22.04
@@ -121,7 +121,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: BizCardScanner-v0.4.0-beta-signed
+          name: BizCardScanner-v0.4.1-beta-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 90
@@ -131,7 +131,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/release/app-release.apk release/BizCardScanner-v0.4.0-beta.apk
+          cp app/build/outputs/apk/release/app-release.apk release/BizCardScanner-v0.4.1-beta.apk
 
       - name: Create beta release if missing
         if: steps.signing.outputs.available == 'true'
@@ -139,8 +139,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view v0.4.0-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "v0.4.0-beta already exists; keeping the existing fixed-signed release."
+          if gh release view v0.4.1-beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v0.4.1-beta already exists; keeping the existing fixed-signed release."
           else
-            gh release create v0.4.0-beta release/BizCardScanner-v0.4.0-beta.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BizCard Scanner v0.4.0-beta" --prerelease --notes "Adds separate Chinese/local and English fields for person name and company, bilingual OCR parsing (including mixed OCR lines), Room migration that preserves existing cards, bilingual search/edit/detail views, CSV/ZIP/vCard preservation, and system-contact handoff that keeps English alternates in notes. Continues using the permanent BizCard signing key for in-place upgrades."
+            gh release create v0.4.1-beta release/BizCardScanner-v0.4.1-beta.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BizCard Scanner v0.4.1-beta" --prerelease --notes "Adds Android Photo Picker for business-card photos from the phone gallery, available even without camera permission. Gallery photos use the same private-storage, perspective-correction, offline OCR and bilingual parser pipeline as camera captures. The post-recognition notes field is clarified as searchable supplemental notes; its content is already included in keyword search. Continues using the permanent BizCard signing key for in-place upgrades."
           fi
