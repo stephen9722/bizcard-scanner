@@ -105,5 +105,8 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     testImplementation("junit:junit:4.13.2")
+    // Android's local-unit-test android.jar contains a throwing org.json stub.
+    // Use the real JVM implementation only for tests so backup compatibility can be verified.
+    testImplementation("org.json:json:20240303")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
